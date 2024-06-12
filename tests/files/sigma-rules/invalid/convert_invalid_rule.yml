@@ -1,0 +1,25 @@
+title: Convert Rule Test
+id: 93199800-b52a-4dec-b762-75212c196556
+status: test
+description: Detects the use of process_lezgo2.pl
+references:
+    - https://ref.pizza-planet.local/ref2
+author: pizza53
+date: 2022/01/24
+modified: 2023/02/14
+tags:
+    - attack.execution
+    - attack.t1569
+logsource:
+    category: process_creation
+    product: windows
+etection:
+    election:
+        CommandLine|contains: 'process_lezgo2.pl'
+    condition: selection
+fields:
+    - CommandLine
+    - ParentCommandLine
+falsepositives:
+    - Legitimate use by administrators
+level: high

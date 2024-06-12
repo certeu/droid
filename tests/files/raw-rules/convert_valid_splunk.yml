@@ -1,0 +1,25 @@
+title: Raw Rule Test
+id: 60fc936d-2eb0-4543-8a13-911c750a1dfc
+status: experimental
+description: Rule to fetch the alerts from Azure (Defender for Cloud)
+references:
+author: pizza53
+date: 2022/05/05
+modified: 2022/05/05
+tags:
+    - attack.privilege_escalation
+    - attack.t1053.002
+logsource:
+    service: graphapi
+    product: azure
+detection: |-
+    index=pizza_magic sourcetype=GraphSecurityAlert
+    | table _time,client_planets,alerts
+falsepositives:
+    - Likely but filtered
+level: high
+custom:
+    earliest_time: -24h@h
+    latest_time: now
+    cron_schedule: '0 1 * * *'
+    #disabled: True
