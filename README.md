@@ -1,7 +1,5 @@
 # droid
 
-# droid documentation
-
 `droid` is a PySigma wrapper allowing an easy adoption of [Sigma](https://sigmahq.io/) and helps enabling Detection-As-Code. The ultimate goal of `droid` is to consume a repository Sigma rules and deploy them on one or multiple platform (SIEM/EDR).
 
 The tool also supports plain SIEM/EDR search queries.
