@@ -29,7 +29,7 @@ jobs:
           uses: actions/upload-artifact@v3.1.2
           with:
               name: detect-droid-artifacts
-              path: /home/runner/work/detect-droid/detect-droid/dist/detect-droid-*.tar.gz
+              path: /home/runner/work/droid/droid/dist/detect_droid-*.tar.gz
               if-no-files-found: error
 
         - name: Checkout
