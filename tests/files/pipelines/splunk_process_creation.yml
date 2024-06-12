@@ -1,0 +1,17 @@
+name: Splunk Windows process creation
+priority: 100
+
+# Author: Mathieu LE CLEACH
+# Purpose if this pipeline:
+# Process the windows/process_creation rules in Splunk
+
+transformations:
+  - id: index_condition
+    type: add_condition
+    conditions:
+      index: windows_sysmon
+      splunk_server: "*prod.planet-express.local"
+    rule_conditions:
+      - type: logsource
+        category: process_creation
+        product: windows

@@ -1,0 +1,29 @@
+title: Detect Usage of Excel
+id: fb3722e4-1a06-46b6-b772-253e2e7db933
+status: test
+description: Test rule to detect usage of excel.exe
+references:
+    - https://www.snip2code.com/Snippet/4397378/UAC-bypass-using-EditionUpgradeManager-C/
+    - https://gist.github.com/hfiref0x/de9c83966623236f5ebf8d9ae2407611
+author: pizza53
+date: 2023/11/06
+modified: 2023/11/06
+tags:
+    - attack.defense_evasion
+    - attack.privilege_escalation
+    - attack.t15.002
+logsource:
+    category: process_access
+    product: windows
+detection:
+    selection:
+        TargetImage|contains: 'EXCEL.EXE'
+    condition: selection
+falsepositives:
+    - Unknown
+level: high
+custom:
+    disabled: True
+    earliest_time: -1h@h
+    latest_time: now
+    cron_schedule: '5 * * * *'

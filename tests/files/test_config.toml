@@ -1,0 +1,77 @@
+# This is a TOML document config
+
+title = "droid configuration file"
+
+[base]
+
+sigma_rules_directory = "sigma-rules"
+raw_rules_directory = "rules-raw"
+
+sigma_validation_config = "tests/files/test_validate.yml"
+
+[platforms]
+
+[platforms.sentinel]
+
+## For searches
+
+days_ago = 1
+timeout = 120 # Search timeout for Sentinel
+
+## Authentication
+
+search_auth = "default"
+export_auth = "app"
+
+workspace = "5962838e-2593-4c0c-b6f8-ce7ba10d72f8" # base workspace for search, mandatory if you use sentinel MSSP
+graph_query = 'resources | where name contains "SecurityInsights" | extend workspaceId = tostring(properties.workspaceResourceId) | project name, workspaceId'
+
+[platforms.sentinel.pipelines]
+
+windows = "microsoft_365_defender"
+
+#########################################
+
+[platforms.splunk]
+
+url = "splunk658.pizza-planet.local"
+verify_cert = true
+port = "8089"
+# user and password are passed in environment variable
+test_earliest_time = "-1h@h"
+test_latest_time = "now"
+
+## For alerts
+# General config
+
+earliest_time = "-1h@h"
+latest_time = "now"
+
+cron_schedule = "0 * * * *"
+
+
+[platforms.splunk.pipelines.windows_process_creation]
+
+pipelines = ["tests/files/pipelines/splunk_process_creation.yml", "splunk_windows"]
+product = "windows"
+category = "process_creation"
+
+[platforms.splunk.savedsearch_parameters]
+
+alert_type = "number of events"
+app = "search"
+sharing = "app"
+alert_comparator = "greater than"
+alert_threshold = 0
+"alert.track" = 1
+allow_skew = "67%"
+"alert.suppress" = 0
+"alert.digest_mode" = 0 # Per result (per row)
+
+[platforms.splunk.action]
+
+actions = "email"
+"action.email.to" = "lela@pizza-planet.local"
+"action.email.subject" = "Alert: $name$"
+"action.email.message.alert" = "Description: $description$"
+"action.email.show_password" = 1

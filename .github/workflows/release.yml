@@ -1,0 +1,47 @@
+on:
+    push:
+        tags:
+            - "*"
+
+jobs:
+    prep:
+      runs-on: ubuntu-latest
+
+      steps:
+        - name: Get Version
+          id: get_version
+          run: |
+              echo "Tag name from GITHUB_REF_NAME: $GITHUB_REF_NAME"
+              echo "Tag name from github.ref_name: ${{  github.ref_name }}"
+
+    build-python:
+      needs: prep
+      runs-on: ubuntu-latest
+
+      steps:
+        - uses: actions/checkout@v3
+        - uses: actions/setup-python@v4
+          with:
+            python-version: '3.11'
+        - run: python3 -m pip install --upgrade build && python3 -m build
+
+        - name: Upload a Build Artifact
+          uses: actions/upload-artifact@v3.1.2
+          with:
+              name: detect-droid-artifacts
+              path: /home/runner/work/detect-droid/detect-droid/dist/detect-droid-*.tar.gz
+              if-no-files-found: error
+
+        - name: Checkout
+          uses: actions/checkout@v4
+        - name: Release
+          uses: softprops/action-gh-release@v1
+          id: create_release
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          with:
+            tag_name: ${{ github.ref_name }}
+            name: Release ${{  github.ref_name }}
+            draft: true
+            prerelease: false
+            fail_on_unmatched_files: true
