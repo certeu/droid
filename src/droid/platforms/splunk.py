@@ -57,6 +57,7 @@ class SplunkPlatform(SplunkBase):
         self._app = self._parameters['app']
         self._job_ttl = self._parameters['job_ttl']
         self._acl_update_owner = self._parameters['acl_update_owner']
+        self._alert_expiration = self._parameters['alert_expiration']
         self._acl_update_perms_read = self._parameters['acl_update_perms_read']
 
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
@@ -193,7 +194,7 @@ class SplunkPlatform(SplunkBase):
         earliest_time = self._earliest_time
         latest_time = self._latest_time
         cron_schedule = self._cron_schedule
-
+        alert_expiration = self._alert_expiration
         alert_name = rule_content["title"]
         alert_description = rule_content["description"]
 
@@ -213,6 +214,7 @@ class SplunkPlatform(SplunkBase):
             "dispatch.latest_time": latest_time,
             "is_scheduled": True,
             "disabled": False,
+            "alert.expires": alert_expiration,
             "is_visible": True
         }
         # Add actions to alert_config from droid_config.toml
