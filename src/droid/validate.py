@@ -53,6 +53,7 @@ class SigmaValidation:
             return issues
         except SigmaConditionError as e:
             self.logger.error(f"Error in Sigma condition for rule {rule_file}: {e}")
+            exit(1)
 
 def load_rule(parameters, logger, rule_file):
 
