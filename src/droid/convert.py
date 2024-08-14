@@ -21,9 +21,10 @@ class Conversion:
     Args:
         parameters(dict)
     """
-    def __init__(self, parameters: dict, platform_name, debug, json) -> None:
+    def __init__(self, parameters: dict, base_config, platform_name, debug, json) -> None:
         self.logger = ColorLogger("droid.convert.Conversion")
         self._parameters = parameters["pipelines"]
+        self._filters_directory = base_config.get('sigma_filters_directory', None)
         self._platform_name = platform_name
         self._debug = debug
         self._json = json
@@ -59,6 +60,20 @@ class Conversion:
 
         return group_match
 
+    def init_sigma_filters(self, rule_file) -> None:
+        """Function to load Sigma filters
+        Args:
+            filter_path
+        """
+        filters = SigmaCollection.load_ruleset(
+            [
+                Path(self._filters_directory),
+                Path(rule_file)
+            ]
+        )
+
+        return filters
+
     def init_sigma_rule(self, rule_file) -> None:
         """Function to load a sigma rule
 
@@ -66,7 +81,11 @@ class Conversion:
             rule
         """
         with open(rule_file, "r") as file:
-            sigma_rule = SigmaCollection.from_yaml(file)
+            if self._filters_directory:
+                sigma_rule = self.init_sigma_filters(rule_file)
+            else:
+                sigma_rule = SigmaCollection.from_yaml(file)
+
         return sigma_rule
 
     def convert_rule(self, rule_content, rule_file):
@@ -134,7 +153,7 @@ def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, pla
     error, search_warning = convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules)
     return error, search_warning
 
-def convert_rules(parameters, droid_config):
+def convert_rules(parameters, droid_config, base_config):
 
     logger = ColorLogger("droid.convert")
 
@@ -152,12 +171,12 @@ def convert_rules(parameters, droid_config):
 
     if parameters.platform and parameters.convert:
         platform_name = parameters.platform
-        target = Conversion(droid_config, platform_name, parameters.debug, parameters.json)
+        target = Conversion(droid_config, base_config, platform_name, parameters.debug, parameters.json)
         platform = None
 
     if parameters.platform and (parameters.search or parameters.export or parameters.integrity):
         platform_name = parameters.platform
-        target = Conversion(droid_config, platform_name, parameters.debug, parameters.json)
+        target = Conversion(droid_config, base_config, platform_name, parameters.debug, parameters.json)
         if platform_name == 'splunk':
             platform = SplunkPlatform(droid_config, parameters.debug, parameters.json)
         elif 'azure' or 'defender' in platform_name:

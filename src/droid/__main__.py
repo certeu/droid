@@ -289,7 +289,7 @@ def main(argv=None) -> None:
             logger.error("Please select a platform.")
             exit(1)
 
-        conversion_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path))
+        conversion_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         if conversion_error:
             logger.error("Conversion errors found")
