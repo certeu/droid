@@ -24,7 +24,7 @@ class SigmaValidation:
             self.logger.enable_json_logging()
 
         if self._debug:
-            self.logger.info("Initialising droid.validate.SigmaValidation")
+            self.logger.info("Initializing droid.validate.SigmaValidation")
 
 
     def validators(self) -> None:
@@ -114,7 +114,7 @@ def validate_sigma_content(rule, parameters, logger, validation, rule_file, rule
     errors = []
 
     if 'correlation' in rule:
-        # Igoring correlation rules in validation
+        # Ignoring correlation rules in validation
         logger.info(f"Ignoring validation for correlation rule: {rule_file}")
         return error
 
