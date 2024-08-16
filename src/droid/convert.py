@@ -33,7 +33,7 @@ class Conversion:
             self.logger.enable_json_logging()
 
         if self._debug:
-            self.logger.info("Initialising droid.convert.Conversion")
+            self.logger.info("Initializing droid.convert.Conversion")
 
     def get_pipeline_config_group(self, rule_content):
         """Retrieve the logsource config group name

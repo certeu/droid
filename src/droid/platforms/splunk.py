@@ -273,7 +273,7 @@ class SplunkPlatform(SplunkBase):
             elif alert_config['alert.suppress'] == "1":
                 pass
             else:
-                self.logger.error('Custom key alert.suppress must be eiter "0" or "1"')
+                self.logger.error('Custom key alert.suppress must be either "0" or "1"')
                 raise
 
         if rule_content.get('custom', {}).get('alert.digest_mode'):
@@ -283,7 +283,7 @@ class SplunkPlatform(SplunkBase):
             elif alert_config['alert.digest_mode'] == "1":
                 pass
             else:
-                self.logger.error('Custom key alert.digest_mode must be eiter "0" or "1"')
+                self.logger.error('Custom key alert.digest_mode must be either "0" or "1"')
                 raise
 
         # Applying trigger actions config if override in custom

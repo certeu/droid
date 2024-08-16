@@ -116,8 +116,6 @@ def search_rule_raw(parameters: dict, export_config: dict):
         if search_warning_i:
             search_warning = True
             return error, search_warning
-
-
     elif path.is_file():
         rule_file = path
         rule_content = load_rule(rule_file)

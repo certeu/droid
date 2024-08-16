@@ -30,7 +30,7 @@ def init_argparse() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
                         prog='droid',
-                        description='Detection Rules Optimisation Integration Deployment',
+                        description='Detection Rules Optimization Integration Deployment',
                         )
     parser.add_argument("-v", "--validate", help="Validate the rules", action="store_true")
     parser.add_argument("-r", "--rules", help="Rules path", required=True)
@@ -62,7 +62,7 @@ def droid_base_config(args, config_path):
             config_data = tomllib.loads(content)
             config = config_data["base"]
     except Exception as e:
-        raise Exception(f"Something unexepected happened: {e}")
+        raise Exception(f"Something unexpected happened: {e}")
 
     return config
 
@@ -130,7 +130,7 @@ def droid_platform_config(args, config_path):
                 config_data = tomllib.loads(content)
                 config_splunk = config_data["platforms"]["splunk"]
         except Exception as e:
-            raise Exception(f"Something unexepected happened: {e}")
+            raise Exception(f"Something unexpected happened: {e}")
 
         if args.export or args.search or args.integrity:
             if environ.get('DROID_SPLUNK_USER'):
@@ -171,7 +171,7 @@ def droid_platform_config(args, config_path):
                 if environ.get('DROID_AZURE_WORKSPACE_NAME'):
                     config['workspace_name'] = environ.get('DROID_AZURE_WORKSPACE_NAME')
         except Exception:
-            raise Exception("Something unexepected happened...")
+            raise Exception("Something unexpected happened...")
 
         if args.export or args.search:
 
@@ -355,7 +355,7 @@ def main(argv=None) -> None:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path))
 
         elif args.platform == "microsoft_defender" and not args.sentinel_mde:
-            logger.error("Export mode for MDE is only avalailable via Azure Sentinel backend for now.")
+            logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
             exit(1)
 
         else:
