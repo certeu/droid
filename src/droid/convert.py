@@ -13,6 +13,7 @@ from droid.export import export_rule
 from droid.integrity import integrity_rule
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
+from droid.platforms.elastic import ElasticPlatform
 from droid.color import ColorLogger
 
 class Conversion:
@@ -179,6 +180,8 @@ def convert_rules(parameters, droid_config, base_config):
         target = Conversion(droid_config, base_config, platform_name, parameters.debug, parameters.json)
         if platform_name == 'splunk':
             platform = SplunkPlatform(droid_config, parameters.debug, parameters.json)
+        elif 'esql' in platform_name:
+            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json)
         elif 'azure' or 'defender' in platform_name:
             platform = SentinelPlatform(droid_config, parameters.debug, parameters.json)
 

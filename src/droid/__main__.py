@@ -39,7 +39,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql'])
     parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
     parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
@@ -152,7 +152,7 @@ def droid_platform_config(args, config_path):
                 config_splunk['action']['action.webhook.param.url'] = environ.get('DROID_SPLUNK_WEBHOOK_URL')
 
         return config_splunk
-
+    
     if 'azure' or 'defender' in args.platform:
 
         try:
@@ -202,6 +202,18 @@ def droid_platform_config(args, config_path):
                     config["client_secret"] = client_secret
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
+            if config["search_auth"] == "basic":
+                if environ.get('DROID_ELASTIC_USERNAME'):
+                    username = environ.get('DROID_ELASTIC_USERNAME')
+                    config["username"] = username
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
+                if environ.get('DROID_ELASTIC_PASSWORD'):
+                    password = environ.get('DROID_ELASTIC_PASSWORD')
+                    config["password"] = password
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
+
 
             elif config["export_auth"] == "app" and args.export:
 
@@ -357,6 +369,13 @@ def main(argv=None) -> None:
         elif args.platform == "microsoft_defender" and not args.sentinel_mde:
             logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
             exit(1)
+
+        elif args.platform == 'esql':
+            if is_raw_rule(args, base_config):
+                logger.info("Elastic Security raw rule selected")
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+            else:
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
 
         else:
             logger.error("Please select one platform. See option -p in --help")
