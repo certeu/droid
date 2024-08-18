@@ -7,6 +7,7 @@ from os import environ
 from pathlib import Path
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
+from droid.platforms.elastic import ElasticPlatform
 from droid.color import ColorLogger
 
 def post_rule_content(rule_content):
@@ -69,6 +70,8 @@ def export_rule_raw(parameters: dict, export_config: dict):
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+    elif parameters.platform == 'esql':
+        platform = ElasticPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():
         error_i = False
