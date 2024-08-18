@@ -262,11 +262,16 @@ class ElasticPlatform(ElasticBase):
             # Hardcoding Indexes is not a good idea
             # Could maybe use a custom field in the rule to specify the index?
             index = self.index_parser(rule_content["logsource"])
+        if rule_content.get("custom", {}).get("disabled") is True:
+            enabled = False
+            self.logger.info(f"Successfully disabled the rule {rule_file}")
+        else:
+            enabled = True
         # Build the ndjson for kibana import
         ndjson = {
             "id": rule_content["id"],
             "name": display_name,
-            "enabled": True,
+            "enabled": enabled,
             "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
             "author": author,
             "description": rule_content["description"],
