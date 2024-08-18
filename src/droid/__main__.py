@@ -83,14 +83,15 @@ def is_raw_rule(args, base_config):
     else:
         return False
     if (
-        (args.platform in ['splunk', 'azure', 'esql', 'eql'] or
+        (args.platform in ['splunk', 'azure'] or
         (args.platform == 'microsoft_defender' and args.sentinel_mde)) and
         (raw_rule_folder_name in args.rules and args.platform in args.rules)
     ):
         return True
-
+    elif args.platform == 'esql' and raw_rule_folder_name in args.rules:
+        return True
     elif (
-        args.platform in ['splunk', 'azure', 'esql'] or
+        args.platform in ['splunk', 'azure'] or
         (args.platform == 'microsoft_defender' and args.sentinel_mde)
     ):
         return False
