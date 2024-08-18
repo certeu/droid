@@ -193,6 +193,20 @@ class ElasticPlatform(ElasticBase):
             pprint(response.json())
             quit()
 
+
+    def index_parser(self, logsource):
+        if "product" in logsource:
+            logsource = logsource["product"]
+        else:
+            logger.error("No Product Specified in Logsource")
+            return None
+        if logsource.lower() == "windows":
+            return ["logs-system.*", "logs-windows.*"]
+        else:
+            logger.error("No known index for Logsource")
+            return None
+
+
     def create_search(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
         Create a scheduled alert rule in Sentinel
@@ -237,6 +251,10 @@ class ElasticPlatform(ElasticBase):
             language = rule_content["custom"]["raw_language"]
         else: 
             language = "esql"
+        if language == "esql":
+            index = None
+        else:
+            index = self.index_parser(rule_content["logsource"])
         ndjson = {
             "id": rule_content["id"],
             "name": display_name,
@@ -265,7 +283,7 @@ class ElasticPlatform(ElasticBase):
             "setup": "",
             "type": language,
             "language": language,
-            "index": None,
+            "index": index,
             "query": rule_converted,
             "filters": [],
             "actions": [],
