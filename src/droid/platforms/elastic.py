@@ -15,17 +15,17 @@ from sigma.data.mitre_attack import (
 )
 import os
 
-logger = ColorLogger("droid.platforms.sentinel")
+logger = ColorLogger("droid.platforms.elastic")
 
 
 class ElasticBase:
-    """Sentinel base class
+    """Elastic base class
 
     Base class for importing datasource/product data
     """
 
     def __init__(self, parameters: dict) -> None:
-        self.logger = ColorLogger("droid.platforms.sentinel.ElasticBase")
+        self.logger = ColorLogger("droid.platforms.elastic.ElasticBase")
         self._parameters = parameters
 
 
@@ -41,7 +41,9 @@ class ElasticPlatform(ElasticBase):
             raise ValueError("ElasticPlatform: 'kibana_url' is not set.")
 
         if "kibana_ca" not in self._parameters:
-            logger.error("ElasticPlatform: 'kibana_ca' is not set, defaulting to Unverified Requests.")
+            logger.error(
+                "ElasticPlatform: 'kibana_ca' is not set, defaulting to Unverified Requests."
+            )
             self._parameters["kibana_ca"] = False
 
         if "schedule_interval" not in self._parameters:
@@ -60,7 +62,7 @@ class ElasticPlatform(ElasticBase):
             logger.debug("ElasticPlatform: 'license' is not set, using default of DRL.")
             self._parameters["license"] = "DRL"
 
-        self.logger = ColorLogger("droid.platforms.sentinel.ElasticPlatform")
+        self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
 
         if self._json:
             self.logger.enable_json_logging()
@@ -164,7 +166,11 @@ class ElasticPlatform(ElasticBase):
     def kibana_import_rule(self, ndjson):
         ndjson = json.dumps(ndjson)
         files = {
-            "file": ("rules.ndjson", io.BytesIO(ndjson.encode('utf-8')), 'application/x-ndjson'),
+            "file": (
+                "rules.ndjson",
+                io.BytesIO(ndjson.encode("utf-8")),
+                "application/x-ndjson",
+            ),
         }
 
         params = {
@@ -193,7 +199,6 @@ class ElasticPlatform(ElasticBase):
             pprint(response.json())
             quit()
 
-
     def index_parser(self, logsource):
         if "product" in logsource:
             logsource = logsource["product"]
@@ -206,10 +211,9 @@ class ElasticPlatform(ElasticBase):
             logger.error("No known index for Logsource")
             return None
 
-
     def create_search(self, rule_content, rule_converted, rule_file):
-        """Create an analytic rule in Sentinel
-        Create a scheduled alert rule in Sentinel
+        """Create an analytic rule in Elastic
+        Create a scheduled alert rule in Elastic
         """
         threat = []
         tags = []
@@ -246,15 +250,19 @@ class ElasticPlatform(ElasticBase):
             self.logger.info(f"Successfully disabled the rule {rule_file}")
         else:
             enabled = True
-        
+
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
-        else: 
+        else:
             language = "esql"
         if language == "esql":
             index = None
         else:
+            # TODO: There needs to be a discussion about how to handle this
+            # Hardcoding Indexes is not a good idea
+            # Could maybe use a custom field in the rule to specify the index?
             index = self.index_parser(rule_content["logsource"])
+        # Build the ndjson for kibana import
         ndjson = {
             "id": rule_content["id"],
             "name": display_name,
@@ -263,11 +271,11 @@ class ElasticPlatform(ElasticBase):
             "author": author,
             "description": rule_content["description"],
             "rule_id": rule_content["id"],
-            "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}", # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
+            "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}",  # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
             "immutable": False,
             "license": self._license,
             "output_index": "",  # TODO: Check if there should be a parameter for this
-            "meta": {"from": "5m"},  # TODO: Use Parameter for this value
+            "meta": {"from": "5m"},
             "max_signals": 100,  # TODO: Check if there should be a parameter for this
             "risk_score": risk_score,
             "risk_score_mapping": [],  # TODO: Check if this should be configurable
@@ -288,6 +296,7 @@ class ElasticPlatform(ElasticBase):
             "filters": [],
             "actions": [],
         }
+        # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
             ndjson["references"] = rule_content["references"]
         if "elastic.bb" in tags:
@@ -297,7 +306,22 @@ class ElasticPlatform(ElasticBase):
 
         try:
             self.kibana_import_rule(ndjson)
-            self.logger.info(f"Successfully exported the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+            self.logger.info(
+                f"Successfully exported the rule {rule_file}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                },
+            )
         except Exception as e:
-            self.logger.error(f"Could not export the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
+            self.logger.error(
+                f"Could not export the rule {rule_file}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                    "error": e,
+                },
+            )
             raise
