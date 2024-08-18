@@ -243,7 +243,7 @@ class ElasticPlatform(ElasticBase):
             "rule_id": rule_content["id"],
             "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}", # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
             "immutable": False,
-            "license": "DRL",  # TODO: Use Parameter for this value
+            "license": self._license,
             "output_index": "",  # TODO: Check if there should be a parameter for this
             "meta": {"from": "5m"},  # TODO: Use Parameter for this value
             "max_signals": 100,  # TODO: Check if there should be a parameter for this
