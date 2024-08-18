@@ -237,11 +237,11 @@ class ElasticPlatform(ElasticBase):
             "id": rule_content["id"],
             "name": display_name,
             "enabled": True,
-            "interval": "1h",  # TODO: Use Parameter for this value
+            "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
             "author": author,
             "description": rule_content["description"],
             "rule_id": rule_content["id"],
-            "from": "now-65m",  # TODO: Use Parameter for this value
+            "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}", # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
             "immutable": False,
             "license": "DRL",  # TODO: Use Parameter for this value
             "output_index": "",  # TODO: Check if there should be a parameter for this
