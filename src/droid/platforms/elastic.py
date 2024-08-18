@@ -232,7 +232,11 @@ class ElasticPlatform(ElasticBase):
             self.logger.info(f"Successfully disabled the rule {rule_file}")
         else:
             enabled = True
-
+        
+        if "custom" in rule_content and "raw_language" in rule_content["custom"]:
+            language = rule_content["custom"]["raw_language"]
+        else: 
+            language = "esql"
         ndjson = {
             "id": rule_content["id"],
             "name": display_name,
@@ -259,8 +263,8 @@ class ElasticPlatform(ElasticBase):
             "related_integrations": [],
             "required_fields": [],
             "setup": "",
-            "type": "esql",
-            "language": "esql",
+            "type": language,
+            "language": language,
             "index": None,
             "query": rule_converted,
             "filters": [],
