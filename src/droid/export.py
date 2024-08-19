@@ -51,7 +51,7 @@ def export_rule(
         if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
             platform.remove_search(rule_content, rule_converted, rule_file)
         else:
-            platform.create_search(rule_content, rule_converted, rule_file)
+            platform.create_search(rule_content, rule_converted, rule_file, index_name)
     except Exception as e:
         logger.error(f"Could not export the rule {rule_file}: {e}")
         error = True

@@ -259,7 +259,7 @@ class ElasticPlatform(ElasticBase):
             self.logger.error("No known index for Logsource")
             return ["logs-*"]
 
-    def create_search(self, rule_content, rule_converted, rule_file):
+    def create_search(self, rule_content, rule_converted, rule_file, index_name):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
         """
@@ -308,6 +308,10 @@ class ElasticPlatform(ElasticBase):
 
         if language == "esql":
             index = None
+        elif index_name:
+            if isinstance(index_name, str):
+                index_name = [index_name]
+            index = index_name
         else:
             # TODO: There needs to be a discussion about how to handle this
             # Hardcoding Indexes is not a good idea
