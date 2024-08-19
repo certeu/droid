@@ -31,7 +31,9 @@ class ElasticBase:
 
 class ElasticPlatform(ElasticBase):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool, language: str) -> None:
+    def __init__(
+        self, parameters: dict, debug: bool, json: bool, language: str
+    ) -> None:
 
         super().__init__(parameters)
         self._debug = debug
@@ -164,6 +166,25 @@ class ElasticPlatform(ElasticBase):
                     return threats
         return None
 
+    def remove_search(self, rule_content, rule_converted, rule_file):
+        """Remove an analytic rule in Elastic"""
+        params = {
+            "rule_id": rule_content["id"],
+        }
+        headers = {
+            "kbn-xsrf": "true",
+        }
+        response = requests.delete(
+            self._kibana_url + "/api/detection_engine/rules",
+            params=params,
+            headers=headers,
+            verify=self._kibana_ca,
+            auth=HTTPBasicAuth(self._username, self._password),
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return False
 
     def get_rule(self, rule_id):
         params = {
@@ -278,15 +299,15 @@ class ElasticPlatform(ElasticBase):
         language = self._language
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
-        
+
         if language == "esql":
             index = None
         else:
             # TODO: There needs to be a discussion about how to handle this
             # Hardcoding Indexes is not a good idea
             # Could maybe use a custom field in the rule to specify the index?
-            #index = self.index_parser(rule_content["logsource"])
-            index = ["logs-*"] # Hardcoded to logs-* for now
+            # index = self.index_parser(rule_content["logsource"])
+            index = ["logs-*"]  # Hardcoded to logs-* for now
 
         if rule_content.get("custom", {}).get("disabled") is True:
             enabled = False
@@ -295,7 +316,7 @@ class ElasticPlatform(ElasticBase):
             enabled = True
         # Build the json_data for kibana import
         json_data = {
-            #"id": rule_content["id"],
+            # "id": rule_content["id"],
             "name": display_name,
             "enabled": enabled,
             "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
