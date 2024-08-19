@@ -31,7 +31,7 @@ class ElasticBase:
 
 class ElasticPlatform(ElasticBase):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
+    def __init__(self, parameters: dict, debug: bool, json: bool, language: str) -> None:
 
         super().__init__(parameters)
         self._debug = debug
@@ -72,6 +72,7 @@ class ElasticPlatform(ElasticBase):
         self._license = self._parameters["license"]
         self._kibana_url = self._parameters["kibana_url"]
         self._kibana_ca = self._parameters["kibana_ca"]
+        self._language = language
 
         if "basic" in (
             self._parameters["search_auth"] or self._parameters["export_auth"]
@@ -184,7 +185,13 @@ class ElasticPlatform(ElasticBase):
             return False
 
     def kibana_import_rule(self, json_data):
-        if self.get_rule(json_data["rule_id"]):
+        existing_rule = self.get_rule(json_data["rule_id"])
+        if existing_rule:
+            if existing_rule["language"] != json_data["language"]:
+                logger.error(
+                    f"Rule '{json_data['name']}' already exists with a different language. Delete the existing rule or change the language of the rule"
+                )
+                return
             params = {
                 "overwrite": "true",
             }
@@ -228,7 +235,7 @@ class ElasticPlatform(ElasticBase):
             return ["logs-system.*", "logs-windows.*"]
         else:
             logger.error("No known index for Logsource")
-            return None
+            return ["logs-*"]
 
     def create_search(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
@@ -269,11 +276,10 @@ class ElasticPlatform(ElasticBase):
             self.logger.info(f"Successfully disabled the rule {rule_file}")
         else:
             enabled = True
-
+        
+        language = self._language
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
-        else:
-            language = "esql"
         
         if language == "esql":
             index = None
@@ -281,7 +287,8 @@ class ElasticPlatform(ElasticBase):
             # TODO: There needs to be a discussion about how to handle this
             # Hardcoding Indexes is not a good idea
             # Could maybe use a custom field in the rule to specify the index?
-            index = self.index_parser(rule_content["logsource"])
+            #index = self.index_parser(rule_content["logsource"])
+            index = ["logs-*"] # Hardcoded to logs-* for now
 
         if rule_content.get("custom", {}).get("disabled") is True:
             enabled = False
