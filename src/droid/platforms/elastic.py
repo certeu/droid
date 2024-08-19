@@ -14,6 +14,7 @@ from sigma.data.mitre_attack import (
     mitre_attack_tactics,
 )
 import os
+from elasticsearch import Elasticsearch
 
 logger = ColorLogger("droid.platforms.elastic")
 
@@ -41,6 +42,14 @@ class ElasticPlatform(ElasticBase):
 
         if "kibana_url" not in self._parameters:
             raise ValueError("ElasticPlatform: 'kibana_url' is not set.")
+
+        if "elastic_hosts" not in self._parameters:
+            logger.error(
+                "ElasticPlatform: 'elastic_hosts' is not set. Searching will not be available"
+            )
+            self._parameters["elastic_hosts"] = []
+        elif not isinstance(self._parameters["elastic_hosts"], list):
+            self._parameters["elastic_hosts"] = [self._parameters["elastic_hosts"]]
 
         if "kibana_ca" not in self._parameters:
             self._parameters["kibana_ca"] = False
@@ -72,6 +81,7 @@ class ElasticPlatform(ElasticBase):
         self._schedule_interval_unit = self._parameters["schedule_interval_unit"]
         self._license = self._parameters["license"]
         self._kibana_url = self._parameters["kibana_url"]
+        self._elastic_hosts = self._parameters["elastic_hosts"]
         self._kibana_ca = self._parameters["kibana_ca"]
         self._tls_verify = self._parameters["tls_verify"]
         self._language = language
@@ -382,3 +392,48 @@ class ElasticPlatform(ElasticBase):
                 },
             )
             raise
+
+    def run_eql_Search(query, es_client=None, index=None):
+        response = es_client.eql.search(
+            index=index,  # TODO: Find a way to make this dynamic or set to logs-* for all logs
+            query=query,
+            wait_for_completion_timeout=0,
+            size=100,  # The maximum number of resulting Sequences to return, might need to be increased for bad hunts
+            filter={"range": {"@timestamp": {"gte": "now-30h"}}},
+        )
+        search_id = response["id"]
+        es_client.eql.get_status(id=search_id)
+        while es_client.eql.get_status(id=search_id)["is_running"]:
+            print(f"Query {search_id} is still running")
+            # print(es_client.eql.get_status(id=search_id))
+            time.sleep(10)
+        print(f"Query {search_id} is done")
+        results = es_client.eql.get(id=search_id)
+        es_client.eql.delete(id=search_id)
+        return results
+
+    def run_esql_search(self, query):
+
+        headers = {
+            "kbn-xsrf": "true",
+            "Content-Type": "application/json",
+        }
+        query = {"query": query}
+        response = requests.post(
+            self._elastic_hosts[0] + "/_query",
+            headers=headers,
+            json=query,
+            verify=False,
+            auth=HTTPBasicAuth(self._username, self._password),
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return response.json()
+
+    def run_elastic_search(self, rule_converted, rule_file, index, language):
+        from pprint import pprint
+
+        if language == "esql":
+            pprint(self.run_esql_search(rule_converted))
+        quit()
