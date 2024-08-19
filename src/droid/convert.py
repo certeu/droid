@@ -81,7 +81,7 @@ class Conversion:
         Args:
             rule
         """
-        with open(rule_file, "r") as file:
+        with open(rule_file, "r", encoding="utf-8") as file:
             if self._filters_directory:
                 sigma_rule = self.init_sigma_filters(rule_file)
             else:
@@ -139,7 +139,7 @@ class Conversion:
 
 def load_rule(rule_file):
 
-    with open(rule_file, 'r') as stream:
+    with open(rule_file, 'r', encoding="utf-8") as stream:
         try:
             object = list(yaml.safe_load_all(stream))[0]
             if 'fields' in object:
