@@ -262,7 +262,7 @@ class ElasticPlatform(ElasticBase):
         """
         threat = []
         tags = []
-        if rule_content["tags"]:
+        if "tags" in rule_content and rule_content["tags"]:
             for tag in rule_content["tags"]:
                 if tag.startswith("attack."):
                     parsed = self.mitre_attack_parser(tag)
