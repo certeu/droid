@@ -262,7 +262,7 @@ class ElasticPlatform(ElasticBase):
 
         # Handling the display name
         if self._alert_prefix:
-            display_name = self._alert_prefix + " " + rule_content["title"]
+            display_name = self._alert_prefix + " - " + rule_content["title"]
         else:
             display_name = rule_content["title"]
         if building_block:
