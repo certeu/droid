@@ -163,41 +163,60 @@ class ElasticPlatform(ElasticBase):
                     return threats
         return None
 
-    def kibana_import_rule(self, ndjson):
-        ndjson = json.dumps(ndjson)
-        files = {
-            "file": (
-                "rules.ndjson",
-                io.BytesIO(ndjson.encode("utf-8")),
-                "application/x-ndjson",
-            ),
-        }
 
+    def get_rule(self, rule_id):
         params = {
-            "overwrite": "true",
+            "rule_id": rule_id,
         }
         headers = {
             "kbn-xsrf": "true",
         }
-        response = requests.post(
-            self._kibana_url + "/api/detection_engine/rules/_import",
+        response = requests.get(
+            self._kibana_url + "/api/detection_engine/rules",
             params=params,
             headers=headers,
-            files=files,
             verify=self._kibana_ca,
             auth=HTTPBasicAuth(self._username, self._password),
         )
         if response.status_code == 200:
+            return response.json()
+        else:
+            return False
+
+    def kibana_import_rule(self, json_data):
+        if self.get_rule(json_data["rule_id"]):
+            params = {
+                "overwrite": "true",
+            }
+            headers = {
+                "kbn-xsrf": "true",
+            }
+            response = requests.put(
+                self._kibana_url + "/api/detection_engine/rules",
+                params=params,
+                headers=headers,
+                json=json_data,
+                verify=self._kibana_ca,
+                auth=HTTPBasicAuth(self._username, self._password),
+            )
+        else:
+            headers = {
+                "kbn-xsrf": "true",
+            }
+            response = requests.post(
+                self._kibana_url + "/api/detection_engine/rules",
+                headers=headers,
+                json=json_data,
+                verify=self._kibana_ca,
+                auth=HTTPBasicAuth(self._username, self._password),
+            )
+        if response.status_code == 200:
             if response.json()["success"]:
                 logger.info(f"Imported successfully")
             else:
-                logger.error(f"Failed to import")
-                pprint(response.json())
-                quit()
+                raise Exception(response.json())
         else:
-            logger.error(f"Failed to import")
-            pprint(response.json())
-            quit()
+            raise Exception(response.text)
 
     def index_parser(self, logsource):
         if "product" in logsource:
@@ -262,14 +281,15 @@ class ElasticPlatform(ElasticBase):
             # Hardcoding Indexes is not a good idea
             # Could maybe use a custom field in the rule to specify the index?
             index = self.index_parser(rule_content["logsource"])
+
         if rule_content.get("custom", {}).get("disabled") is True:
             enabled = False
             self.logger.info(f"Successfully disabled the rule {rule_file}")
         else:
             enabled = True
-        # Build the ndjson for kibana import
-        ndjson = {
-            "id": rule_content["id"],
+        # Build the json_data for kibana import
+        json_data = {
+            #"id": rule_content["id"],
             "name": display_name,
             "enabled": enabled,
             "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
@@ -303,14 +323,14 @@ class ElasticPlatform(ElasticBase):
         }
         # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
-            ndjson["references"] = rule_content["references"]
+            json_data["references"] = rule_content["references"]
         if "elastic.bb" in tags:
-            ndjson["building_block_type"] = "default"
+            json_data["building_block_type"] = "default"
         if "falsepositives" in rule_content:
-            ndjson["false_positives"] = rule_content["falsepositives"]
+            json_data["false_positives"] = rule_content["falsepositives"]
 
         try:
-            self.kibana_import_rule(ndjson)
+            self.kibana_import_rule(json_data)
             self.logger.info(
                 f"Successfully exported the rule {rule_file}",
                 extra={
