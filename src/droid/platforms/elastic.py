@@ -274,6 +274,7 @@ class ElasticPlatform(ElasticBase):
             language = rule_content["custom"]["raw_language"]
         else:
             language = "esql"
+        
         if language == "esql":
             index = None
         else:

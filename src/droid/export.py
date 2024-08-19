@@ -72,6 +72,8 @@ def export_rule_raw(parameters: dict, export_config: dict):
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'esql':
         platform = ElasticPlatform(export_config, parameters.debug, parameters.json)
+    elif parameters.platform == 'eql':
+        platform = ElasticPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():
         error_i = False

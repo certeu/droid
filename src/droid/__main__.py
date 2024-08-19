@@ -39,7 +39,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'elastic-esql', 'elastic-eql'])
     parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
     parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
@@ -88,7 +88,7 @@ def is_raw_rule(args, base_config):
         (raw_rule_folder_name in args.rules and args.platform in args.rules)
     ):
         return True
-    elif args.platform == 'esql' and raw_rule_folder_name in args.rules:
+    elif args.platform in ['esql', 'eql'] and raw_rule_folder_name in args.rules:
         return True
     elif (
         args.platform in ['splunk', 'azure'] or
@@ -267,7 +267,9 @@ def main(argv=None) -> None:
         raise Exception(f"Error: configuration file {args.config_file} not found.")
     else:
         config_path = args.config_file
-
+    # Check if platform is elastic and remove the prefix since the backends are called esql and eql
+    if args.platform.startswith("elastic-"):
+        args.platform = args.platform.replace("elastic-", "")
     if args.validate:
 
         logger.info(f"Validation mode was selected - path selected: {args.rules}")
@@ -371,6 +373,12 @@ def main(argv=None) -> None:
             exit(1)
 
         elif args.platform == 'esql':
+            if is_raw_rule(args, base_config):
+                logger.info("Elastic Security raw rule selected")
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+            else:
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+        elif args.platform == 'eql':
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
