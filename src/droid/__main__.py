@@ -226,7 +226,7 @@ def droid_platform_config(args, config_path):
 
         return config
 
-    if args.platform == 'esql':
+    if args.platform in ['esql', 'eql']:
 
         try:
             with open(config_path) as file_obj:
