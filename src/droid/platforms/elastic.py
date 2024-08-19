@@ -5,6 +5,7 @@ Module for Elastic Security
 from droid.color import ColorLogger
 import io
 import json
+import time
 from pprint import pprint
 import requests
 from requests.auth import HTTPBasicAuth
@@ -395,11 +396,11 @@ class ElasticPlatform(ElasticBase):
 
     def run_eql_Search(query, es_client=None, index=None):
         response = es_client.eql.search(
-            index=index,  # TODO: Find a way to make this dynamic or set to logs-* for all logs
+            index=index,
             query=query,
             wait_for_completion_timeout=0,
-            size=100,  # The maximum number of resulting Sequences to return, might need to be increased for bad hunts
-            filter={"range": {"@timestamp": {"gte": "now-30h"}}},
+            size=100,
+            filter={"range": {"@timestamp": {"gte": "now-1h"}}},
         )
         search_id = response["id"]
         es_client.eql.get_status(id=search_id)
@@ -412,28 +413,28 @@ class ElasticPlatform(ElasticBase):
         es_client.eql.delete(id=search_id)
         return results
 
-    def run_esql_search(self, query):
-
-        headers = {
-            "kbn-xsrf": "true",
-            "Content-Type": "application/json",
-        }
-        query = {"query": query}
-        response = requests.post(
-            self._elastic_hosts[0] + "/_query",
-            headers=headers,
-            json=query,
-            verify=False,
-            auth=HTTPBasicAuth(self._username, self._password),
+    def run_esql_search(self, query, es_client=None):
+        response = es_client.esql.query(
+            query=query,
+            format="json",
         )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return response.json()
+        return response
 
     def run_elastic_search(self, rule_converted, rule_file, index, language):
         from pprint import pprint
 
+        es_client = Elasticsearch(
+            self._elastic_hosts,
+            basic_auth=(self._username, self._password),
+            verify_certs=False,
+            ca_certs=self._tls_verified,
+            request_timeout=300,
+            max_retries=3,
+        )
         if language == "esql":
-            pprint(self.run_esql_search(rule_converted))
+            pprint(self.run_esql_search(rule_converted, es_client=es_client))
+        elif language == "eql":
+            pprint(
+                self.run_eql_search(rule_converted, es_client=es_client, index=index)
+            )
         quit()
