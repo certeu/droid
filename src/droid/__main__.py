@@ -39,7 +39,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'elastic-esql', 'elastic-eql'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql', 'eql'])
     parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
     parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
