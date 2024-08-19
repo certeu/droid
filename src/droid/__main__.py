@@ -267,9 +267,6 @@ def main(argv=None) -> None:
         raise Exception(f"Error: configuration file {args.config_file} not found.")
     else:
         config_path = args.config_file
-    # Check if platform is elastic and remove the prefix since the backends are called esql and eql
-    if args.platform.startswith("elastic-"):
-        args.platform = args.platform.replace("elastic-", "")
     if args.validate:
 
         logger.info(f"Validation mode was selected - path selected: {args.rules}")
