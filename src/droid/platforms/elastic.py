@@ -188,7 +188,7 @@ class ElasticPlatform(ElasticBase):
         existing_rule = self.get_rule(json_data["rule_id"])
         if existing_rule:
             if existing_rule["language"] != json_data["language"]:
-                logger.error(
+                self.logger.error(
                     f"Rule '{json_data['name']}' already exists with a different language. Delete the existing rule or change the language of the rule"
                 )
                 return
@@ -217,11 +217,9 @@ class ElasticPlatform(ElasticBase):
                 verify=self._kibana_ca,
                 auth=HTTPBasicAuth(self._username, self._password),
             )
+
         if response.status_code == 200:
-            if response.json()["success"]:
-                logger.info(f"Imported successfully")
-            else:
-                raise Exception(response.json())
+            return True
         else:
             raise Exception(response.text)
 
@@ -229,12 +227,12 @@ class ElasticPlatform(ElasticBase):
         if "product" in logsource:
             logsource = logsource["product"]
         else:
-            logger.error("No Product Specified in Logsource")
+            self.logger.error("No Product Specified in Logsource")
             return None
         if logsource.lower() == "windows":
             return ["logs-system.*", "logs-windows.*"]
         else:
-            logger.error("No known index for Logsource")
+            self.logger.error("No known index for Logsource")
             return ["logs-*"]
 
     def create_search(self, rule_content, rule_converted, rule_file):
