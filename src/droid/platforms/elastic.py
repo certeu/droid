@@ -262,15 +262,12 @@ class ElasticPlatform(ElasticBase):
         """
         threat = []
         tags = []
-        building_block = False
         if rule_content["tags"]:
             for tag in rule_content["tags"]:
                 if tag.startswith("attack."):
                     parsed = self.mitre_attack_parser(tag)
                     if parsed:
                         threat += parsed
-                elif tag == "elastic.bb":
-                    building_block = True
                 else:
                     tags.append(tag)
         severity = rule_content["level"]
@@ -280,6 +277,12 @@ class ElasticPlatform(ElasticBase):
         author = rule_content["author"]
         if isinstance(author, str):
             author = [author]
+
+        if rule_content.get("custom", {}).get("building_block") is True:
+            building_block = True
+            self.logger.info(f"Successfully building_block the rule {rule_file}")
+        else:
+            building_block = False
 
         # Handling the display name
         if self._alert_prefix:
@@ -295,7 +298,7 @@ class ElasticPlatform(ElasticBase):
             self.logger.info(f"Successfully disabled the rule {rule_file}")
         else:
             enabled = True
-        
+
         language = self._language
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
@@ -309,11 +312,6 @@ class ElasticPlatform(ElasticBase):
             # index = self.index_parser(rule_content["logsource"])
             index = ["logs-*"]  # Hardcoded to logs-* for now
 
-        if rule_content.get("custom", {}).get("disabled") is True:
-            enabled = False
-            self.logger.info(f"Successfully disabled the rule {rule_file}")
-        else:
-            enabled = True
         # Build the json_data for kibana import
         json_data = {
             # "id": rule_content["id"],
