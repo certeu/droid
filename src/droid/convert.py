@@ -123,18 +123,19 @@ class Conversion:
             sigma_rule = self.init_sigma_rule(rule_file)
             rule_converted = backend.convert(sigma_rule, self._format)[0]
             # For esql and eql backend, we grab the value of the transformation state with the key index
+            index_value = None
             if isinstance(platform, ElasticPlatform):
                 for item in pipeline.items:
-                    if item.transformation.key == 'index':
-                        index_value = item.transformation.val
-                        self.logger.info(f"The value of the key 'index' is: {index_value}")
-                        break
-            else:
-                index_value = None
+                    if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
+                        if item.transformation.key == 'index':
+                            index_value = item.transformation.val
+                            self.logger.info(f"The value of the key 'index' is: {index_value}")
+                            break
             self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
             return rule_converted, index_value
         else:
             self.logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
+            return None, None # Return None, None if the rule is not supported otherwise python will throw an error
 
 def load_rule(rule_file):
 
