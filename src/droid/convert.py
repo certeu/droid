@@ -248,7 +248,10 @@ def convert_sigma(parameters, logger, rule_content, rule_file, target, platform,
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
-
+    except NotImplementedError as e:
+        logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        error = True
+        return error, search_warning
     except Exception as e:
             logger.error(f"Fatal error when compiling the rule {rule_file} - verify the backend {e} is installed")
             error = True
