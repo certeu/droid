@@ -43,10 +43,9 @@ class ElasticPlatform(ElasticBase):
             raise ValueError("ElasticPlatform: 'kibana_url' is not set.")
 
         if "kibana_ca" not in self._parameters:
-            logger.error(
-                "ElasticPlatform: 'kibana_ca' is not set, defaulting to Unverified Requests."
-            )
             self._parameters["kibana_ca"] = False
+        if "tls_verify" not in self._parameters:
+            self._parameters["tls_verify"] = True
 
         if "schedule_interval" not in self._parameters:
             logger.debug(
@@ -74,11 +73,10 @@ class ElasticPlatform(ElasticBase):
         self._license = self._parameters["license"]
         self._kibana_url = self._parameters["kibana_url"]
         self._kibana_ca = self._parameters["kibana_ca"]
+        self._tls_verify = self._parameters["tls_verify"]
         self._language = language
 
-        if "basic" in (
-            self._parameters["search_auth"] or self._parameters["export_auth"]
-        ):
+        if self._parameters["auth_method"] == "basic":
             self._username = self._parameters["username"]
             self._password = self._parameters["password"]
 
@@ -86,6 +84,11 @@ class ElasticPlatform(ElasticBase):
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
             self._alert_prefix = None
+
+        if self._kibana_ca:
+            self._tls_verified = self._kibana_ca
+        else:
+            self._tls_verified = self._tls_verify
 
     def level_parser(self, level):
         level = level.lower()
@@ -178,7 +181,7 @@ class ElasticPlatform(ElasticBase):
             self._kibana_url + "/api/detection_engine/rules",
             params=params,
             headers=headers,
-            verify=self._kibana_ca,
+            verify=self._tls_verified,
             auth=HTTPBasicAuth(self._username, self._password),
         )
         if response.status_code == 200:
@@ -197,7 +200,7 @@ class ElasticPlatform(ElasticBase):
             self._kibana_url + "/api/detection_engine/rules",
             params=params,
             headers=headers,
-            verify=self._kibana_ca,
+            verify=self._tls_verified,
             auth=HTTPBasicAuth(self._username, self._password),
         )
         if response.status_code == 200:
@@ -224,7 +227,7 @@ class ElasticPlatform(ElasticBase):
                 params=params,
                 headers=headers,
                 json=json_data,
-                verify=self._kibana_ca,
+                verify=self._tls_verified,
                 auth=HTTPBasicAuth(self._username, self._password),
             )
         else:
@@ -235,7 +238,7 @@ class ElasticPlatform(ElasticBase):
                 self._kibana_url + "/api/detection_engine/rules",
                 headers=headers,
                 json=json_data,
-                verify=self._kibana_ca,
+                verify=self._tls_verified,
                 auth=HTTPBasicAuth(self._username, self._password),
             )
 

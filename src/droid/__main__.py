@@ -90,6 +90,8 @@ def is_raw_rule(args, base_config):
         return True
     elif args.platform in ['esql', 'eql'] and raw_rule_folder_name in args.rules:
         return True
+    elif args.platform in ['esql', 'eql']:
+        return False
     elif (
         args.platform in ['splunk', 'azure'] or
         (args.platform == 'microsoft_defender' and args.sentinel_mde)
@@ -152,9 +154,8 @@ def droid_platform_config(args, config_path):
                 config_splunk['action']['action.webhook.param.url'] = environ.get('DROID_SPLUNK_WEBHOOK_URL')
 
         return config_splunk
-    
-    if 'azure' or 'defender' in args.platform:
 
+    if args.platform == 'azure' or args.platform == 'defender':
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()
@@ -202,18 +203,6 @@ def droid_platform_config(args, config_path):
                     config["client_secret"] = client_secret
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
-            if config["search_auth"] == "basic":
-                if environ.get('DROID_ELASTIC_USERNAME'):
-                    username = environ.get('DROID_ELASTIC_USERNAME')
-                    config["username"] = username
-                else:
-                    raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
-                if environ.get('DROID_ELASTIC_PASSWORD'):
-                    password = environ.get('DROID_ELASTIC_PASSWORD')
-                    config["password"] = password
-                else:
-                    raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
-
 
             elif config["export_auth"] == "app" and args.export:
 
@@ -236,6 +225,32 @@ def droid_platform_config(args, config_path):
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
 
         return config
+
+    if args.platform == 'esql':
+
+        try:
+            with open(config_path) as file_obj:
+                content = file_obj.read()
+                config_data = tomllib.loads(content)
+                config_elastic = config_data["platforms"][args.platform]
+        except Exception as e:
+            raise Exception(f"Something unexpected happened: {e}")
+
+        if config_elastic["auth_method"] == "basic":
+            if args.export or args.search or args.integrity:
+                if environ.get('DROID_ELASTIC_USERNAME'):
+                    username = environ.get('DROID_ELASTIC_USERNAME')
+                    config_elastic["username"] = username
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
+                if environ.get('DROID_ELASTIC_PASSWORD'):
+                    password = environ.get('DROID_ELASTIC_PASSWORD')
+                    config_elastic["password"] = password
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
+
+        return config_elastic
+
 
 def main(argv=None) -> None:
     """Main function
@@ -349,7 +364,7 @@ def main(argv=None) -> None:
                 logger.info("Splunk raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == 'azure':
             if is_raw_rule(args, base_config):
@@ -372,9 +387,11 @@ def main(argv=None) -> None:
         elif args.platform == 'esql':
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                platform_config = droid_platform_config(args, config_path)
+                export_error = export_rule_raw(parameters, platform_config)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                platform_config = droid_platform_config(args, config_path)
+                export_error = convert_rules(parameters, platform_config, base_config)
         elif args.platform == 'eql':
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")

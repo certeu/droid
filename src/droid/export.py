@@ -37,7 +37,10 @@ def load_rule(rule_file):
             error = True
             return error
 
-def export_rule(parameters: dict, rule_content: object, rule_converted: str, platform: object, rule_file: str, error: bool):
+def export_rule(
+        parameters: dict, rule_content: object, rule_converted: str,
+        platform: object, rule_file: str, error: bool, index_name: str | None):
+
     logger = ColorLogger("droid.export")
 
     rule_content = post_rule_content(rule_content)

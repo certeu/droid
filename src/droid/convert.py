@@ -89,7 +89,7 @@ class Conversion:
 
         return sigma_rule
 
-    def convert_rule(self, rule_content, rule_file):
+    def convert_rule(self, rule_content, rule_file, platform):
 
         plugins = InstalledSigmaPlugins.autodiscover()
         backends = plugins.backends
@@ -122,8 +122,17 @@ class Conversion:
             backend: Backend = backend_class(processing_pipeline=pipeline)
             sigma_rule = self.init_sigma_rule(rule_file)
             rule_converted = backend.convert(sigma_rule, self._format)[0]
+            # For esql and eql backend, we grab the value of the transformation state with the key index
+            if isinstance(platform, ElasticPlatform):
+                for item in pipeline.items:
+                    if item.transformation.key == 'index':
+                        index_value = item.transformation.val
+                        self.logger.info(f"The value of the key 'index' is: {index_value}")
+                        break
+            else:
+                index_value = None
             self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
-            return rule_converted
+            return rule_converted, index_value
         else:
             self.logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
 
@@ -234,7 +243,8 @@ def convert_rules(parameters, droid_config, base_config):
 def convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules):
 
     try:
-        rule_converted = target.convert_rule(rule_content, rule_file)
+        index_name = None
+        rule_converted, index_name = target.convert_rule(rule_content, rule_file, platform)
 
         if parameters.debug:
             logger.debug(f"Rule {rule_file} converted into: {rule_converted}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
@@ -270,15 +280,15 @@ def convert_sigma(parameters, logger, rule_content, rule_file, target, platform,
         return error, search_warning
 
     elif parameters.search and rule_converted:
-        error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning)
+        error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, index_name)
         return error, search_warning
 
     elif parameters.export and rule_converted:
-        error = export_rule(parameters, rule_content, rule_converted, platform, rule_file, error)
+        error = export_rule(parameters, rule_content, rule_converted, platform, rule_file, error, index_name)
         return error, search_warning
 
     elif parameters.integrity and rule_converted:
-        error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error)
+        error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, index_name)
         return error, search_warning
 
     elif parameters.module:
