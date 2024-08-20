@@ -186,7 +186,7 @@ class ElasticPlatform(AbstractPlatform):
                             break
         else:
             index_value = "logs-*"
-            self.logger.warning("No logsource found in the rule, using default index 'logs-*'")
+            logger.warning("No logsource found in the rule, using default index 'logs-*'")
         if isinstance(index_value, str):
             self._index_name = []
             self._index_name.append(index_value)
