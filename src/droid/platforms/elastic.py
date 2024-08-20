@@ -42,6 +42,13 @@ class ElasticPlatform(AbstractPlatform):
             self._parameters["elastic_hosts"] = []
         elif not isinstance(self._parameters["elastic_hosts"], list):
             self._parameters["elastic_hosts"] = [self._parameters["elastic_hosts"]]
+        if "elastic_ca" not in self._parameters:
+            self._parameters["elastic_ca"] = None
+        if "elastic_tls_verify" not in self._parameters:
+            self._parameters["elastic_tls_verify"] = False
+            logger.error(
+                "ElasticPlatform: 'elastic_tls_verify' is not set. Defaulting to not verifying TLS"
+            )
 
         if "kibana_ca" not in self._parameters:
             self._parameters["kibana_ca"] = False
@@ -76,6 +83,8 @@ class ElasticPlatform(AbstractPlatform):
         self._elastic_hosts = self._parameters["elastic_hosts"]
         self._kibana_ca = self._parameters["kibana_ca"]
         self._tls_verify = self._parameters["tls_verify"]
+        self._elastic_ca = self._parameters["elastic_ca"]
+        self._elastic_tls_verify = self._parameters["elastic_tls_verify"]
         self._language = language
 
         if self._parameters["auth_method"] == "basic":
@@ -413,7 +422,7 @@ class ElasticPlatform(AbstractPlatform):
             )
             raise
 
-    def run_eql_Search(query, es_client=None, index=None):
+    def run_eql_search(query, es_client=None, index=None):
         response = es_client.eql.search(
             index=index,
             query=query,
@@ -430,30 +439,28 @@ class ElasticPlatform(AbstractPlatform):
         print(f"Query {search_id} is done")
         results = es_client.eql.get(id=search_id)
         es_client.eql.delete(id=search_id)
-        return results
+        if "hits" in results:
+            return results["hits"]["total"]["value"]
 
     def run_esql_search(self, query, es_client=None):
         response = es_client.esql.query(
             query=query,
-            format="json",
+            filter={"range": {"@timestamp": {"gte": "now-24h"}}},
         )
-        return response
+        if "values" in response:
+            return len(response["values"])
 
     def run_elastic_search(self, rule_converted, rule_file, index, language):
-        from pprint import pprint
 
         es_client = Elasticsearch(
             self._elastic_hosts,
             basic_auth=(self._username, self._password),
-            verify_certs=False,
-            ca_certs=self._tls_verified,
+            verify_certs=self._elastic_tls_verify,
+            ca_certs=self._elastic_ca,
             request_timeout=300,
             max_retries=3,
         )
         if language == "esql":
-            pprint(self.run_esql_search(rule_converted, es_client=es_client))
+            return self.run_esql_search(rule_converted, es_client=es_client)
         elif language == "eql":
-            pprint(
-                self.run_eql_search(rule_converted, es_client=es_client, index=index)
-            )
-        quit()
+            return self.run_eql_search(rule_converted, es_client=es_client, index=index)
