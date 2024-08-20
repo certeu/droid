@@ -8,6 +8,7 @@ import json
 import time
 from pprint import pprint
 import requests
+from droid.abstracts import AbstractPlatform
 from requests.auth import HTTPBasicAuth
 from sigma.data.mitre_attack import (
     mitre_attack_techniques,
@@ -19,25 +20,14 @@ from elasticsearch import Elasticsearch
 
 logger = ColorLogger("droid.platforms.elastic")
 
-
-class ElasticBase:
-    """Elastic base class
-
-    Base class for importing datasource/product data
-    """
-
-    def __init__(self, parameters: dict) -> None:
-        self.logger = ColorLogger("droid.platforms.elastic.ElasticBase")
-        self._parameters = parameters
-
-
-class ElasticPlatform(ElasticBase):
+class ElasticPlatform(AbstractPlatform):
 
     def __init__(
         self, parameters: dict, debug: bool, json: bool, language: str
     ) -> None:
+        super().__init__(name="Elastic")
+        self._parameters = parameters
 
-        super().__init__(parameters)
         self._debug = debug
         self._json = json
 
@@ -180,7 +170,22 @@ class ElasticPlatform(ElasticBase):
                     return threats
         return None
 
-    def remove_search(self, rule_content, rule_converted, rule_file):
+    def get_index_name(self, pipeline):
+        for item in pipeline.items:
+            if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
+                if item.transformation.key == 'index':
+                    index_value = item.transformation.val
+                    self.logger.info(f"The value of the key 'index' is: {index_value}")
+        if isinstance(index_value, str):
+            self._index_name = []
+            self._index_name.append(index_value)
+        elif isinstance(index_value, list):
+            self._index_name = index_value
+        else:
+            logger.error("Index name in pipeline is missing or malformed")
+            raise
+
+    def remove_rule(self, rule_content, rule_converted, rule_file):
         """Remove an analytic rule in Elastic"""
         params = {
             "rule_id": rule_content["id"],
@@ -270,7 +275,7 @@ class ElasticPlatform(ElasticBase):
             self.logger.error("No known index for Logsource")
             return ["logs-*"]
 
-    def create_search(self, rule_content, rule_converted, rule_file, index_name):
+    def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
         """
@@ -318,17 +323,7 @@ class ElasticPlatform(ElasticBase):
             language = rule_content["custom"]["raw_language"]
 
         if language == "esql":
-            index = None
-        elif index_name:
-            if isinstance(index_name, str):
-                index_name = [index_name]
-            index = index_name
-        else:
-            # TODO: There needs to be a discussion about how to handle this
-            # Hardcoding Indexes is not a good idea
-            # Could maybe use a custom field in the rule to specify the index?
-            # index = self.index_parser(rule_content["logsource"])
-            index = ["logs-*"]  # Hardcoded to logs-* for now
+            self._index_name = None
 
         # Build the json_data for kibana import
         json_data = {
@@ -359,7 +354,7 @@ class ElasticPlatform(ElasticBase):
             "setup": "",
             "type": language,
             "language": language,
-            "index": index,
+            "index": self._index_name,
             "query": rule_converted,
             "filters": [],
             "actions": [],

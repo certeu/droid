@@ -232,7 +232,7 @@ def droid_platform_config(args, config_path):
             with open(config_path) as file_obj:
                 content = file_obj.read()
                 config_data = tomllib.loads(content)
-                config_elastic = config_data["platforms"][args.platform]
+                config_elastic = config_data["platforms"]["elastic"]
         except Exception as e:
             raise Exception(f"Something unexpected happened: {e}")
 
@@ -384,7 +384,8 @@ def main(argv=None) -> None:
             logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
             exit(1)
 
-        elif args.platform == 'esql':
+        elif args.platform == 'esql' or args.platform == 'eql':
+            args.platform == 'elastic'
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
                 platform_config = droid_platform_config(args, config_path)
@@ -392,12 +393,6 @@ def main(argv=None) -> None:
             else:
                 platform_config = droid_platform_config(args, config_path)
                 export_error = convert_rules(parameters, platform_config, base_config)
-        elif args.platform == 'eql':
-            if is_raw_rule(args, base_config):
-                logger.info("Elastic Security raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
-            else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
 
         else:
             logger.error("Please select one platform. See option -p in --help")

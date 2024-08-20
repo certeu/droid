@@ -6,24 +6,19 @@ import splunklib.client as client
 from os import environ
 from time import sleep
 from droid.color import ColorLogger
+from droid.abstracts import AbstractPlatform
 from splunklib.binding import AuthenticationError
 
 logger = ColorLogger("droid.platforms.splunk")
 
-class SplunkBase:
-    """
-    Base class for importing datasource/product data
-    """
-
-    def __init__(self, parameters: dict) -> None:
-        self.logger = ColorLogger("droid.platforms.splunk.SplunkBase")
-        self._parameters = parameters
-
-class SplunkPlatform(SplunkBase):
+class SplunkPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
 
-        super().__init__(parameters)
+        super().__init__(name="Splunk")
+
+        self._parameters = parameters
+
         self._debug = debug
         self._json = json
 
@@ -147,7 +142,7 @@ class SplunkPlatform(SplunkBase):
         except:
             return False
 
-    def remove_search(self, rule_content: dict, rule_converted: str, rule_file: str):
+    def remove_rule(self, rule_content: dict, rule_converted: str, rule_file: str):
 
         alert_name = rule_content["title"]
 
@@ -189,8 +184,7 @@ class SplunkPlatform(SplunkBase):
 
         return group_match
 
-    def create_search(self, rule_content: dict, rule_converted: str, rule_file: str):
-
+    def create_rule(self, rule_content: dict, rule_converted: str, rule_file: str):
         earliest_time = self._earliest_time
         latest_time = self._latest_time
         cron_schedule = self._cron_schedule
@@ -199,11 +193,12 @@ class SplunkPlatform(SplunkBase):
         alert_description = rule_content["description"]
 
         service = client.connect(
-            host= self._url,
+            host=self._url,
             port=self._port,
             username=self._user,
             password=self._password,
-            app=self._app)
+            app=self._app
+        )
 
         alert_config = {
             "name": alert_name,
@@ -217,13 +212,14 @@ class SplunkPlatform(SplunkBase):
             "alert.expires": alert_expiration,
             "is_visible": True
         }
+
         # Add actions to alert_config from droid_config.toml
 
         # Applying global config
-
         if rule_content.get('custom', {}).get('disabled') is True:
             alert_config["disabled"] = True
-            self.logger.info(f"Successfully disabled the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+            self.logger.info(f"Successfully disabled the rule {rule_file}",
+                            extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
 
         if 'savedsearch_parameters' in self._parameters:
             for item in self._parameters['savedsearch_parameters']:
@@ -234,49 +230,39 @@ class SplunkPlatform(SplunkBase):
                 alert_config[item] = self._parameters['action'][item]
 
         # Applying general config if override in custom
-
-        # earliest_time provided from rule, overriding the global config
-        if ('custom' and 'earliest_time' in str(rule_content)):
-            alert_config['dispatch.earliest_time'] = rule_content['custom']["earliest_time"]
-
-        # latest provided from rule, overriding the global config
-        if ('custom' and 'latest_time' in str(rule_content)):
-            alert_config['dispatch.latest_time'] = rule_content['custom']["latest_time"]
-
-        # cron schedule from rule, overriding the global config
-        if ('custom' and 'cron_schedule' in str(rule_content)):
-            alert_config['cron_schedule'] = rule_content['custom']["cron_schedule"]
-
-        # cron schedule from rule, overriding the global config
+        if 'custom' in rule_content:
+            custom_config = rule_content['custom']
+            if 'earliest_time' in custom_config:
+                alert_config['dispatch.earliest_time'] = custom_config["earliest_time"]
+            if 'latest_time' in custom_config:
+                alert_config['dispatch.latest_time'] = custom_config["latest_time"]
+            if 'cron_schedule' in custom_config:
+                alert_config['cron_schedule'] = custom_config["cron_schedule"]
 
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
-
             suppress_config_group = self.get_suppress_config_group(rule_content)
-
             if suppress_config_group:
                 alert_config['alert.suppress.fields'] = self._suppress_fields_groups[suppress_config_group]['alert.suppress.fields']
-
             alert_config.pop('suppress_fields_groups')
 
-
-        if ('custom' and 'alert.suppress.fields' in str(rule_content)):
+        if 'alert.suppress.fields' in rule_content.get('custom', {}):
             alert_config['alert.suppress.fields'] = rule_content['custom']["alert.suppress.fields"]
 
-        if ('custom' and 'alert.suppress.period' in str(rule_content)):
+        if 'alert.suppress.period' in rule_content.get('custom', {}):
             alert_config['alert.suppress.period'] = rule_content['custom']["alert.suppress.period"]
 
-        if rule_content.get('custom', {}).get('alert.suppress'):
+        if 'alert.suppress' in rule_content.get('custom', {}):
             alert_config['alert.suppress'] = rule_content['custom']["alert.suppress"]
-            if alert_config.get('alert.suppress') == "0":
+            if alert_config['alert.suppress'] == "0":
                 alert_config.pop('alert.suppress.period', None)
                 alert_config.pop('alert.suppress.fields', None)
             elif alert_config['alert.suppress'] == "1":
                 pass
             else:
                 self.logger.error('Custom key alert.suppress must be either "0" or "1"')
-                raise
+                raise ValueError('Custom key alert.suppress must be either "0" or "1"')
 
-        if rule_content.get('custom', {}).get('alert.digest_mode'):
+        if 'alert.digest_mode' in rule_content.get('custom', {}):
             alert_config['alert.digest_mode'] = rule_content['custom']["alert.digest_mode"]
             if alert_config['alert.digest_mode'] == "0":
                 pass
@@ -284,11 +270,10 @@ class SplunkPlatform(SplunkBase):
                 pass
             else:
                 self.logger.error('Custom key alert.digest_mode must be either "0" or "1"')
-                raise
+                raise ValueError('Custom key alert.digest_mode must be either "0" or "1"')
 
         # Applying trigger actions config if override in custom
-
-        if (rule_content.get('custom', {}) and 'actions' in str(rule_content)):
+        if 'actions' in rule_content.get('custom', {}):
             alert_config['actions'] = rule_content['custom']["actions"]
 
             if 'action.webhook.param.url' in rule_content['custom']:
@@ -297,26 +282,31 @@ class SplunkPlatform(SplunkBase):
                     env = webhook_url[1:]
                     if not environ.get(env):
                         self.logger.error(f"Could not find {env} in env")
-                        raise
+                        raise EnvironmentError(f"Could not find {env} in env")
                     alert_config['action.webhook.param.url'] = environ.get(env)
                 else:
                     alert_config['action.webhook.param.url'] = webhook_url
 
-        # Create the new alert (saved search)
-        if self.search_savedsearch(rule_content): # If the rule already exists
+        # Create or update the saved search
+        if self.search_savedsearch(rule_content):  # If the rule already exists
             saved_search = self.search_savedsearch(rule_content)
-            del alert_config['name']
+            del alert_config['name']  # Remove name as it can't be updated
             try:
                 saved_search.update(**alert_config).refresh()
-                self.logger.info(f"Saved search for rule {rule_file} modified", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+                self.logger.info(f"Saved search for rule {rule_file} modified",
+                                extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
             except Exception as e:
-                self.logger.error(f"Could not modify the saved search for rule {rule_file} created - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
+                self.logger.error(f"Could not modify the saved search for rule {rule_file} created - error: {e}",
+                                extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
                 raise
         else:
             try:
                 saved_search = service.saved_searches.create(**alert_config)
-                self.logger.info(f"Saved search for rule {rule_file} created", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+                self.logger.info(f"Saved search for rule {rule_file} created",
+                                extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
             except Exception as e:
-                self.logger.error(f"Could not create the saved search for rule {rule_file}: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
+                self.logger.error(f"Could not create the saved search for rule {rule_file}: {e}",
+                                extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
                 raise
+
 

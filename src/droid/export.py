@@ -39,7 +39,7 @@ def load_rule(rule_file):
 
 def export_rule(
         parameters: dict, rule_content: object, rule_converted: str,
-        platform: object, rule_file: str, error: bool, index_name: str | None):
+        platform: object, rule_file: str, error: bool):
 
     logger = ColorLogger("droid.export")
 
@@ -49,9 +49,9 @@ def export_rule(
         logger.enable_json_logging()
     try:
         if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
-            platform.remove_search(rule_content, rule_converted, rule_file)
+            platform.remove_rule(rule_content, rule_converted, rule_file)
         else:
-            platform.create_search(rule_content, rule_converted, rule_file, index_name)
+            platform.create_rule(rule_content, rule_converted, rule_file)
     except Exception as e:
         logger.error(f"Could not export the rule {rule_file}: {e}")
         error = True
@@ -86,13 +86,13 @@ def export_rule_raw(parameters: dict, export_config: dict):
             rule_converted = rule_content['detection']
             if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
                 try:
-                    platform.remove_search(rule_content, rule_converted, rule_file)
+                    platform.remove_rule(rule_content, rule_converted, rule_file)
                 except:
                     logger.error(f"Error in removing search for rule {rule_file}")
                     error_i = True
             else:
                 try:
-                    platform.create_search(rule_content, rule_converted, rule_file)
+                    platform.create_rule(rule_content, rule_converted, rule_file)
                 except:
                     logger.error(f"Error in creating search for rule {rule_file}")
                     error_i = True
@@ -107,13 +107,13 @@ def export_rule_raw(parameters: dict, export_config: dict):
         rule_converted = rule_content['detection']
         if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
             try:
-                platform.remove_search(rule_content, rule_converted, rule_file)
+                platform.remove_rule(rule_content, rule_converted, rule_file)
             except:
                 logger.error(f"Error in removing search for rule {rule_file}")
                 error = True
         else:
             try:
-                platform.create_search(rule_content, rule_converted, rule_file)
+                platform.create_rule(rule_content, rule_converted, rule_file)
             except:
                 logger.error(f"Error in creating search for rule {rule_file}")
                 error = True
