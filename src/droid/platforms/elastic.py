@@ -185,7 +185,7 @@ class ElasticPlatform(AbstractPlatform):
             logger.error("Index name in pipeline is missing or malformed")
             raise
 
-    def remove_rule(self, rule_content, rule_converted, rule_file):
+    def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
         """Remove an analytic rule in Elastic"""
         params = {
             "rule_id": rule_content["id"],
@@ -224,14 +224,13 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return False
 
-    def kibana_import_rule(self, json_data):
+    def kibana_import_rule(self, json_data, rule_content):
         existing_rule = self.get_rule(json_data["rule_id"])
+        if existing_rule and existing_rule["language"] != json_data["language"]:
+            self.remove_rule(rule_content)
+            self.logger.warning(f"Rule '{json_data['name']}' already existed in different language. It was recreated with the new language")
+            existing_rule = False
         if existing_rule:
-            if existing_rule["language"] != json_data["language"]:
-                self.logger.error(
-                    f"Rule '{json_data['name']}' already exists with a different language. Delete the existing rule or change the language of the rule"
-                )
-                return
             params = {
                 "overwrite": "true",
             }
@@ -368,7 +367,7 @@ class ElasticPlatform(AbstractPlatform):
             json_data["false_positives"] = rule_content["falsepositives"]
 
         try:
-            self.kibana_import_rule(json_data)
+            self.kibana_import_rule(json_data, rule_content)
             self.logger.info(
                 f"Successfully exported the rule {rule_file}",
                 extra={
