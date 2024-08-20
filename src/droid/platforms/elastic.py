@@ -170,12 +170,22 @@ class ElasticPlatform(AbstractPlatform):
                     return threats
         return None
 
-    def get_index_name(self, pipeline):
-        for item in pipeline.items:
-            if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
-                if item.transformation.key == 'index':
-                    index_value = item.transformation.val
-                    self.logger.info(f"The value of the key 'index' is: {index_value}")
+    def get_index_name(self, pipeline, rule_content):
+        if "logsource" in rule_content:
+            for item in pipeline.items:
+                if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
+                    if item.transformation.key == 'index':
+                        matches = 0
+                        for rule_condition in item.transformation.processing_item.rule_conditions:
+                            for key, value in rule_content["logsource"].items():
+                                if rule_condition.__dict__[key] == value:
+                                    matches += 1
+                        if matches == len(rule_content["logsource"]):
+                            index_value = item.transformation.val
+                            self.logger.info(f"The value of the key 'index' is: {index_value}")
+                            break
+        else:
+            index_value = "logs-*"
         if isinstance(index_value, str):
             self._index_name = []
             self._index_name.append(index_value)
@@ -261,18 +271,6 @@ class ElasticPlatform(AbstractPlatform):
             return True
         else:
             raise Exception(response.text)
-
-    def index_parser(self, logsource):
-        if "product" in logsource:
-            logsource = logsource["product"]
-        else:
-            self.logger.error("No Product Specified in Logsource")
-            return None
-        if logsource.lower() == "windows":
-            return ["logs-system.*", "logs-windows.*"]
-        else:
-            self.logger.error("No known index for Logsource")
-            return ["logs-*"]
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic

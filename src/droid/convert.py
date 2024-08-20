@@ -124,7 +124,7 @@ class Conversion:
             rule_converted = backend.convert(sigma_rule, self._format)[0]
             # For esql and eql backend only
             if isinstance(platform, ElasticPlatform):
-                platform.get_index_name(pipeline)
+                platform.get_index_name(pipeline, rule_content)
             self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
             return rule_converted
         else:
