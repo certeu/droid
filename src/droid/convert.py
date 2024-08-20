@@ -129,7 +129,6 @@ class Conversion:
             return rule_converted
         else:
             self.logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
-            return None, None # Return None, None if the rule is not supported otherwise python will throw an error
 
 def load_rule(rule_file):
 
