@@ -20,6 +20,7 @@ from elasticsearch import Elasticsearch
 
 logger = ColorLogger("droid.platforms.elastic")
 
+
 class ElasticPlatform(AbstractPlatform):
 
     def __init__(
@@ -172,21 +173,44 @@ class ElasticPlatform(AbstractPlatform):
 
     def get_index_name(self, pipeline, rule_content):
         index_value = "logs-*"
+        index_found = False
         if "logsource" in rule_content:
             for item in pipeline.items:
-                if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
-                    if item.transformation.key == 'index':
+                if (
+                    hasattr(item, "transformation")
+                    and hasattr(item.transformation, "key")
+                    and hasattr(item.transformation, "val")
+                ):
+                    if item.transformation.key == "index":
                         matches = 0
-                        for rule_condition in item.transformation.processing_item.rule_conditions:
+                        for (
+                            rule_condition
+                        ) in item.transformation.processing_item.rule_conditions:
                             for key, value in rule_content["logsource"].items():
-                                if rule_condition.__dict__[key] == value:
-                                    matches += 1
+                                if key in [
+                                    "category",
+                                    "custom_attributes",
+                                    "product",
+                                    "service",
+                                    "source",
+                                ]:
+                                    if rule_condition.logsource.__dict__[key] == value:
+                                        matches += 1
                         if matches == len(rule_content["logsource"]):
                             index_value = item.transformation.val
-                            self.logger.info(f"The value of the key 'index' is: {index_value}")
+                            self.logger.info(
+                                f"The value of the key 'index' is: {index_value}"
+                            )
+                            index_found = True
                             break
         else:
-            logger.warning("No logsource found in the rule, using default index 'logs-*'")
+            logger.warning(
+                "No logsource found in the rule, using default index 'logs-*'"
+            )
+        if not index_found:
+            logger.warning(
+                "No index value found for the rule, using default index 'logs-*'"
+            )
         if isinstance(index_value, str):
             self._index_name = []
             self._index_name.append(index_value)
@@ -239,7 +263,9 @@ class ElasticPlatform(AbstractPlatform):
         existing_rule = self.get_rule(json_data["rule_id"])
         if existing_rule and existing_rule["language"] != json_data["language"]:
             self.remove_rule(rule_content)
-            self.logger.warning(f"Rule '{json_data['name']}' already existed in different language. It was recreated with the new language")
+            self.logger.warning(
+                f"Rule '{json_data['name']}' already existed in different language. It was recreated with the new language"
+            )
             existing_rule = False
         if existing_rule:
             params = {
