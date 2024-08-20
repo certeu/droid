@@ -171,6 +171,7 @@ class ElasticPlatform(AbstractPlatform):
         return None
 
     def get_index_name(self, pipeline, rule_content):
+        index_value = "logs-*"
         if "logsource" in rule_content:
             for item in pipeline.items:
                 if hasattr(item, 'transformation') and hasattr(item.transformation, 'key') and hasattr(item.transformation, 'val'):
@@ -185,7 +186,6 @@ class ElasticPlatform(AbstractPlatform):
                             self.logger.info(f"The value of the key 'index' is: {index_value}")
                             break
         else:
-            index_value = "logs-*"
             logger.warning("No logsource found in the rule, using default index 'logs-*'")
         if isinstance(index_value, str):
             self._index_name = []
