@@ -73,7 +73,7 @@ class ElasticPlatform(AbstractPlatform):
 
         if "eql_search_range_gte" not in self._parameters:
             logger.debug(
-                "ElasticPlatform: 'eql_search_range_gte' is not set, using default of 1h."
+                "ElasticPlatform: 'eql_search_range_gte' is not set, using default of 24h."
             )
             self._parameters["eql_search_range_gte"] = "now-24h"
         if "esql_search_range_gte" not in self._parameters:
