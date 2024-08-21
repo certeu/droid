@@ -335,7 +335,7 @@ def main(argv=None) -> None:
             search_error, search_warning = search_rule_raw(parameters, droid_platform_config(args, config_path))
         else:
             logger.info(f"Searching Sigma rule for platform {args.platform} selected")
-            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path))
+            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         if search_error and search_warning:
             logger.warning("Hits found while search one or multiple rules")
@@ -371,14 +371,14 @@ def main(argv=None) -> None:
                 logger.info("Azure Sentinel raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == 'microsoft_defender' and args.sentinel_mde:
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft Defender for Endpoint raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == "microsoft_defender" and not args.sentinel_mde:
             logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
@@ -388,11 +388,9 @@ def main(argv=None) -> None:
             args.platform == 'elastic'
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
-                platform_config = droid_platform_config(args, config_path)
-                export_error = export_rule_raw(parameters, platform_config)
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                platform_config = droid_platform_config(args, config_path)
-                export_error = convert_rules(parameters, platform_config, base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         else:
             logger.error("Please select one platform. See option -p in --help")
@@ -426,7 +424,7 @@ def main(argv=None) -> None:
             integrity_error = integrity_rule_raw(parameters, droid_platform_config(args, config_path))
         else:
             logger.info(f"Integrity check for platform {args.platform} selected")
-            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path))
+            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         if integrity_error:
             logger.error("Integrity error")

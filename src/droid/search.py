@@ -68,11 +68,11 @@ def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, pa
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f'(Sentinel) Match found for {rule_file}')
+            logger.warning(f'(Elastic) {result} hits found for {rule_file}')
             search_warning = True
             return error, search_warning
         else:
-            logger.info(f"(Sentinel) No hits for {rule_file}")
+            logger.info(f"(Elastic) No hits for {rule_file}")
             return error, search_warning
 
     except Exception as e:

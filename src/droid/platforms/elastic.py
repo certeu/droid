@@ -76,6 +76,8 @@ class ElasticPlatform(AbstractPlatform):
         if self._json:
             self.logger.enable_json_logging()
 
+        self._eql_search_range_gte = self._parameters["eql_search_range_gte"]
+        self._esql_search_range_gte = self._parameters["esql_search_range_gte"]
         self._schedule_interval = self._parameters["schedule_interval"]
         self._schedule_interval_unit = self._parameters["schedule_interval_unit"]
         self._license = self._parameters["license"]
@@ -428,7 +430,7 @@ class ElasticPlatform(AbstractPlatform):
             query=query,
             wait_for_completion_timeout=0,
             size=100,
-            filter={"range": {"@timestamp": {"gte": "now-1h"}}},
+            filter={"range": {"@timestamp": {"gte": self._eql_search_range_gte}}},
         )
         search_id = response["id"]
         es_client.eql.get_status(id=search_id)
@@ -447,7 +449,7 @@ class ElasticPlatform(AbstractPlatform):
     def run_esql_search(self, query, es_client=None):
         response = es_client.esql.query(
             query=query,
-            filter={"range": {"@timestamp": {"gte": "now-24h"}}},
+            filter={"range": {"@timestamp": {"gte": self._esql_search_range_gte}}},
         )
         if "values" in response:
             return len(response["values"])
