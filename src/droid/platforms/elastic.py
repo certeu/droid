@@ -282,6 +282,32 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return False
 
+    def check_rule_changes(self, existing_rule, new_rule):
+        fields = [
+            "name",
+            "description",
+            "query",
+            "language",
+            "severity",
+            "risk_score",
+            "threat",
+            "tags",
+            "enabled",
+            "interval",
+            "author",
+            "from",
+            "to",
+            "license",
+            "actions",
+            "false_positives",
+        ]
+        if new_rule["index"]:
+            fields.append("index")
+        for field in fields:
+            if existing_rule[field] != new_rule[field]:
+                return True
+        return False
+
     def kibana_import_rule(self, json_data, rule_content):
         existing_rule = self.get_search(json_data["rule_id"])
         if existing_rule and existing_rule["language"] != json_data["language"]:
@@ -291,20 +317,26 @@ class ElasticPlatform(AbstractPlatform):
             )
             existing_rule = False
         if existing_rule:
-            params = {
-                "overwrite": "true",
-            }
-            headers = {
-                "kbn-xsrf": "true",
-            }
-            response = requests.put(
-                self._kibana_url + "/api/detection_engine/rules",
-                params=params,
-                headers=headers,
-                json=json_data,
-                verify=self._tls_verified,
-                auth=HTTPBasicAuth(self._username, self._password),
-            )
+            if self.check_rule_changes(existing_rule, json_data):
+                params = {
+                    "overwrite": "true",
+                }
+                headers = {
+                    "kbn-xsrf": "true",
+                }
+                response = requests.put(
+                    self._kibana_url + "/api/detection_engine/rules",
+                    params=params,
+                    headers=headers,
+                    json=json_data,
+                    verify=self._tls_verified,
+                    auth=HTTPBasicAuth(self._username, self._password),
+                )
+            else:
+                self.logger.info(
+                    f"Rule '{json_data['name']}' already exists and is up to date"
+                )
+                return True
         else:
             headers = {
                 "kbn-xsrf": "true",
