@@ -433,14 +433,16 @@ class ElasticPlatform(AbstractPlatform):
         search_id = response["id"]
         es_client.eql.get_status(id=search_id)
         while es_client.eql.get_status(id=search_id)["is_running"]:
-            print(f"Query {search_id} is still running")
+            logger.debug(f"Query {search_id} is still running")
             # print(es_client.eql.get_status(id=search_id))
             time.sleep(10)
-        print(f"Query {search_id} is done")
+        logger.debug(f"Query {search_id} is done")
         results = es_client.eql.get(id=search_id)
         es_client.eql.delete(id=search_id)
         if "hits" in results:
             return results["hits"]["total"]["value"]
+        else:
+            return None
 
     def run_esql_search(self, query, es_client=None):
         response = es_client.esql.query(
@@ -469,3 +471,5 @@ class ElasticPlatform(AbstractPlatform):
             return self.run_esql_search(rule_converted, es_client=es_client)
         elif language == "eql":
             return self.run_eql_search(rule_converted, es_client=es_client, index=index)
+        else:
+            raise ValueError(f"Unsupported language: {language}")
