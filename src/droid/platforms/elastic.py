@@ -71,6 +71,18 @@ class ElasticPlatform(AbstractPlatform):
             logger.debug("ElasticPlatform: 'license' is not set, using default of DRL.")
             self._parameters["license"] = "DRL"
 
+        if "eql_search_range_gte" not in self._parameters:
+            logger.debug(
+                "ElasticPlatform: 'eql_search_range_gte' is not set, using default of 1h."
+            )
+            self._parameters["eql_search_range_gte"] = "now-24h"
+        if "esql_search_range_gte" not in self._parameters:
+            logger.debug(
+                "ElasticPlatform: 'esql_search_range_gte' is not set, using default of 1h."
+            )
+            self._parameters["esql_search_range_gte"] = "now-1h"
+
+
         self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
 
         if self._json:
@@ -251,7 +263,7 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return False
 
-    def get_rule(self, rule_id):
+    def get_search(self, rule_id):
         params = {
             "rule_id": rule_id,
         }
@@ -271,7 +283,7 @@ class ElasticPlatform(AbstractPlatform):
             return False
 
     def kibana_import_rule(self, json_data, rule_content):
-        existing_rule = self.get_rule(json_data["rule_id"])
+        existing_rule = self.get_search(json_data["rule_id"])
         if existing_rule and existing_rule["language"] != json_data["language"]:
             self.remove_rule(rule_content)
             self.logger.warning(
