@@ -60,10 +60,10 @@ def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, 
         error = True
         return error, search_warning
 
-def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, parameters, logger, error, search_warning, index, platform_name):
+def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, parameters, logger, error, search_warning, rule_content, platform_name):
 
     try:
-        result: int = platform.run_elastic_search(rule_converted, rule_file, index, platform_name)
+        result: int = platform.run_elastic_search(rule_converted, platform_name, rule_content)
 
         logger.info(f"Successfully searched the rule {rule_file}")
 
@@ -80,7 +80,7 @@ def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, pa
         error = True
         return error, search_warning
 
-def search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, index=None):
+def search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning):
 
     logger = ColorLogger("droid.search")
 
@@ -100,7 +100,7 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
     elif parameters.platform in ["esql", "eql"]:
         error, search_warning = search_rule_elastic(rule_converted, platform, rule_file,
                                                     parameters, logger, error, search_warning,
-                                                    index, parameters.platform)
+                                                    rule_content, parameters.platform)
         return error, search_warning
     elif 'azure' or 'defender' in parameters.platform:
         if parameters.mssp:

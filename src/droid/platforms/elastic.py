@@ -46,7 +46,7 @@ class ElasticPlatform(AbstractPlatform):
             self._parameters["elastic_ca"] = None
         if "elastic_tls_verify" not in self._parameters:
             self._parameters["elastic_tls_verify"] = False
-            logger.error(
+            logger.warning(
                 "ElasticPlatform: 'elastic_tls_verify' is not set. Defaulting to not verifying TLS"
             )
 
@@ -422,7 +422,7 @@ class ElasticPlatform(AbstractPlatform):
             )
             raise
 
-    def run_eql_search(query, es_client=None, index=None):
+    def run_eql_search(self, query, es_client=None, index=None):
         response = es_client.eql.search(
             index=index,
             query=query,
@@ -450,7 +450,7 @@ class ElasticPlatform(AbstractPlatform):
         if "values" in response:
             return len(response["values"])
 
-    def run_elastic_search(self, rule_converted, rule_file, index, language):
+    def run_elastic_search(self, rule_converted, language=None, rule_content=None):
 
         es_client = Elasticsearch(
             self._elastic_hosts,
@@ -460,6 +460,11 @@ class ElasticPlatform(AbstractPlatform):
             request_timeout=300,
             max_retries=3,
         )
+
+        index = self._index_name
+        if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
+            language = rule_content["custom"]["raw_language"]
+        print(language)
         if language == "esql":
             return self.run_esql_search(rule_converted, es_client=es_client)
         elif language == "eql":
