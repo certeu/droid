@@ -369,7 +369,9 @@ class ElasticPlatform(AbstractPlatform):
             return query
         # (^[^\|]*) - Match everything before the first pipe
         try:
-            query = re.sub(r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query)
+            # Older Elastic Versions need brackets around the Metadata fields
+            # It is possible that this will deprecated in the future
+            query = re.sub(r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query)
         except Exception as e:
             logger.error(f"Error while preparing rule for deduplication {e}")
         return query
