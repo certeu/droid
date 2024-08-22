@@ -184,9 +184,9 @@ def convert_rules(parameters, droid_config, base_config):
         if platform_name == 'splunk':
             platform = SplunkPlatform(droid_config, parameters.debug, parameters.json)
         elif 'esql' in platform_name:
-            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "esql")
+            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "esql", raw=False)
         elif 'eql' in platform_name:
-            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "eql")
+            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "eql", raw=False)
         elif 'azure' or 'defender' in platform_name:
             platform = SentinelPlatform(droid_config, parameters.debug, parameters.json)
 

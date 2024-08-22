@@ -25,7 +25,7 @@ logger = ColorLogger("droid.platforms.elastic")
 class ElasticPlatform(AbstractPlatform):
 
     def __init__(
-        self, parameters: dict, debug: bool, json: bool, language: str
+        self, parameters: dict, debug: bool, json: bool, language: str, raw: bool=False
     ) -> None:
         super().__init__(name="Elastic")
         self._parameters = parameters
@@ -107,6 +107,7 @@ class ElasticPlatform(AbstractPlatform):
         self._elastic_tls_verify = self._parameters["elastic_tls_verify"]
         self._legacy_esql = self._parameters["legacy_esql"]
         self._language = language
+        self._raw = raw
 
         if self._parameters["auth_method"] == "basic":
             self._username = self._parameters["username"]
@@ -306,7 +307,7 @@ class ElasticPlatform(AbstractPlatform):
                 "from",
                 "to",
                 "license",
-                "actions",
+                "actions"
             ]
             if new_rule["index"]:
                 fields.append("index")
@@ -336,7 +337,7 @@ class ElasticPlatform(AbstractPlatform):
             existing_rule = False
         if existing_rule:
             if self.check_rule_changes(existing_rule, json_data):
-
+                
                 params = {
                     "overwrite": "true",
                 }
@@ -373,7 +374,7 @@ class ElasticPlatform(AbstractPlatform):
         else:
             raise Exception(response.text)
 
-    def cleanup_esql_query(self, query):
+    def  cleanup_esql_query(self, query):
         # For the deduplication of Alerts each query needs the following fields after the FROM Statement:
         # METADATA _id, _index, _version
         # Example: FROM logs-* METADATA _id, _index, _version
@@ -391,21 +392,19 @@ class ElasticPlatform(AbstractPlatform):
             # Newer ones deprecated the brackets
             # Hence the legacy_esql flag
             if self._legacy_esql:
-                query = re.sub(
-                    r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query
-                )
+                query = re.sub(r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query)
             else:
-                query = re.sub(
-                    r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query
-                )
+                query = re.sub(r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query)
         except Exception as e:
             logger.error(f"Error while preparing rule for deduplication {e}")
         return query
+
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
         """
+        
         threat = []
         tags = []
         if "tags" in rule_content and rule_content["tags"]:
@@ -448,45 +447,71 @@ class ElasticPlatform(AbstractPlatform):
         language = self._language
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
+        elif self._raw:
+            self.logger.error(
+                f"Raw Languages need the custom parameter 'raw_language' to be set",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                    "error": e,
+                },
+            )
+            raise
 
         if language == "esql":
             self._index_name = None
             rule_converted = self.cleanup_esql_query(rule_converted)
 
-        # Build the json_data for kibana import
-        json_data = {
-            # "id": rule_content["id"],
-            "name": display_name,
-            "enabled": enabled,
-            "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
-            "author": author,
-            "description": rule_content["description"],
-            "rule_id": rule_content["id"],
-            "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}",  # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
-            "immutable": False,
-            "license": self._license,
-            "output_index": "",  # TODO: Check if there should be a parameter for this
-            "meta": {"from": "5m"},
-            "max_signals": 100,  # TODO: Check if there should be a parameter for this
-            "risk_score": risk_score,
-            "risk_score_mapping": [],  # TODO: Check if this should be configurable
-            "severity": severity,
-            "severity_mapping": [],  # TODO: Check if this should be configurable
-            "threat": threat,
-            "tags": tags,
-            "to": "now",
-            "version": 1,  # TODO: Check if this actually matters
-            "exceptions_list": [],
-            "related_integrations": [],
-            "required_fields": [],
-            "setup": "",
-            "type": language,
-            "language": language,
-            "index": self._index_name,
-            "query": rule_converted,
-            "filters": [],
-            "actions": [],
-        }
+        if language == "eql" and self._raw:
+            self._index_name = ["logs-*"]
+
+        if language == "eql" and self._raw and "custom" in rule_content and "index" in rule_content["custom"]:
+            if isinstance(rule_content["custom"]["index"], str):
+                self._index_name = [rule_content["custom"]["index"]]
+            else:
+                self._index_name = rule_content["custom"]["index"]
+
+
+        try:
+            # Build the json_data for kibana import
+            json_data = {
+                # "id": rule_content["id"],
+                "name": display_name,
+                "enabled": enabled,
+                "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
+                "author": author,
+                "description": rule_content["description"],
+                "rule_id": rule_content["id"],
+                "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}",  # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
+                "immutable": False,
+                "license": self._license,
+                "output_index": "",  # TODO: Check if there should be a parameter for this
+                "meta": {"from": "5m"},
+                "max_signals": 100,  # TODO: Check if there should be a parameter for this
+                "risk_score": risk_score,
+                "risk_score_mapping": [],  # TODO: Check if this should be configurable
+                "severity": severity,
+                "severity_mapping": [],  # TODO: Check if this should be configurable
+                "threat": threat,
+                "tags": tags,
+                "to": "now",
+                "version": 1,  # TODO: Check if this actually matters
+                "exceptions_list": [],
+                "related_integrations": [],
+                "required_fields": [],
+                "setup": "",
+                "type": language,
+                "language": language,
+                "index": self._index_name,
+                "query": rule_converted,
+                "filters": [],
+                "actions": [],
+            }
+        except Exception as e:
+            print(e)
+             
+        
         # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
             json_data["references"] = rule_content["references"]
@@ -494,7 +519,7 @@ class ElasticPlatform(AbstractPlatform):
             json_data["building_block_type"] = "default"
         if "falsepositives" in rule_content:
             json_data["false_positives"] = rule_content["falsepositives"]
-
+        
         try:
             self.kibana_import_rule(json_data, rule_content)
             self.logger.info(
@@ -559,11 +584,7 @@ class ElasticPlatform(AbstractPlatform):
         )
 
         index = self._index_name
-        if (
-            rule_content
-            and "custom" in rule_content
-            and "raw_language" in rule_content["custom"]
-        ):
+        if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
         print(language)
         if language == "esql":

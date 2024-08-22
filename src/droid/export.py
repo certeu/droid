@@ -74,9 +74,9 @@ def export_rule_raw(parameters: dict, export_config: dict):
     elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'esql':
-        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "esql")
+        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "esql", raw=True)
     elif parameters.platform == 'eql':
-        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "eql")
+        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "eql", raw=True)
 
     if path.is_dir():
         error_i = False
