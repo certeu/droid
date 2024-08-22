@@ -5,6 +5,7 @@ Module for Elastic Security
 from droid.color import ColorLogger
 import io
 import json
+import re
 import time
 from pprint import pprint
 import requests
@@ -354,6 +355,26 @@ class ElasticPlatform(AbstractPlatform):
         else:
             raise Exception(response.text)
 
+    def  cleanup_esql_query(self, query):
+        # For the deduplication of Alerts each query needs the following fields after the FROM Statement:
+        # METADATA _id, _index, _version
+        # Example: FROM logs-* METADATA _id, _index, _version
+        # https://www.elastic.co/guide/en/security/8.15/rules-ui-create.html#esql-non-agg-query-dedupe
+        lowerquery = query.lower()
+        # Ignore Correlation Rules because they already deduplicate themselves
+        if "stats " in lowerquery and " by " in lowerquery:
+            return query
+        # Ignore if the query already contains the fields
+        if "METADATA" and "_id" and "_index" and "_version" in lowerquery:
+            return query
+        # (^[^\|]*) - Match everything before the first pipe
+        try:
+            query = re.sub(r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query)
+        except Exception as e:
+            logger.error(f"Error while preparing rule for deduplication {e}")
+        return query
+
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
@@ -403,6 +424,7 @@ class ElasticPlatform(AbstractPlatform):
 
         if language == "esql":
             self._index_name = None
+            rule_converted = self.cleanup_esql_query(rule_converted)
 
         # Build the json_data for kibana import
         json_data = {
