@@ -83,6 +83,11 @@ class ElasticPlatform(AbstractPlatform):
             )
             self._parameters["esql_search_range_gte"] = "now-1h"
 
+        if "legacy_esql" not in self._parameters:
+            logger.debug(
+                "ElasticPlatform: 'legacy_esql' is not set, using default of False."
+            )
+            self._parameters["legacy_esql"] = False
 
         self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
 
@@ -100,6 +105,7 @@ class ElasticPlatform(AbstractPlatform):
         self._tls_verify = self._parameters["tls_verify"]
         self._elastic_ca = self._parameters["elastic_ca"]
         self._elastic_tls_verify = self._parameters["elastic_tls_verify"]
+        self._legacy_esql = self._parameters["legacy_esql"]
         self._language = language
 
         if self._parameters["auth_method"] == "basic":
@@ -284,29 +290,40 @@ class ElasticPlatform(AbstractPlatform):
             return False
 
     def check_rule_changes(self, existing_rule, new_rule):
-        fields = [
-            "name",
-            "description",
-            "query",
-            "language",
-            "severity",
-            "risk_score",
-            "threat",
-            "tags",
-            "enabled",
-            "interval",
-            "author",
-            "from",
-            "to",
-            "license",
-            "actions",
-            "false_positives",
-        ]
-        if new_rule["index"]:
-            fields.append("index")
-        for field in fields:
-            if existing_rule[field] != new_rule[field]:
-                return True
+        try:
+            fields = [
+                "name",
+                "description",
+                "query",
+                "language",
+                "severity",
+                "risk_score",
+                "threat",
+                "tags",
+                "enabled",
+                "interval",
+                "author",
+                "from",
+                "to",
+                "license",
+                "actions",
+            ]
+            if new_rule["index"]:
+                fields.append("index")
+            if "falsepositives" in new_rule:
+                fields.append("falsepositives")
+            if "references" in new_rule:
+                fields.append("references")
+            if "building_block_type" in new_rule:
+                fields.append("building_block_type")
+            for field in fields:
+                if existing_rule[field] != new_rule[field]:
+                    logger.info(f"Rule '{new_rule['name']}' has changed")
+                    return True
+        except Exception as e:
+            logger.error(f"Error while checking rule changes {e}")
+            return True
+        logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
         return False
 
     def kibana_import_rule(self, json_data, rule_content):
@@ -319,6 +336,7 @@ class ElasticPlatform(AbstractPlatform):
             existing_rule = False
         if existing_rule:
             if self.check_rule_changes(existing_rule, json_data):
+
                 params = {
                     "overwrite": "true",
                 }
@@ -355,7 +373,7 @@ class ElasticPlatform(AbstractPlatform):
         else:
             raise Exception(response.text)
 
-    def  cleanup_esql_query(self, query):
+    def cleanup_esql_query(self, query):
         # For the deduplication of Alerts each query needs the following fields after the FROM Statement:
         # METADATA _id, _index, _version
         # Example: FROM logs-* METADATA _id, _index, _version
@@ -370,12 +388,19 @@ class ElasticPlatform(AbstractPlatform):
         # (^[^\|]*) - Match everything before the first pipe
         try:
             # Older Elastic Versions need brackets around the Metadata fields
-            # It is possible that this will deprecated in the future
-            query = re.sub(r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query)
+            # Newer ones deprecated the brackets
+            # Hence the legacy_esql flag
+            if self._legacy_esql:
+                query = re.sub(
+                    r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query
+                )
+            else:
+                query = re.sub(
+                    r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query
+                )
         except Exception as e:
             logger.error(f"Error while preparing rule for deduplication {e}")
         return query
-
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
@@ -401,7 +426,7 @@ class ElasticPlatform(AbstractPlatform):
 
         if rule_content.get("custom", {}).get("building_block") is True:
             building_block = True
-            self.logger.info(f"Successfully building_block the rule {rule_file}")
+
         else:
             building_block = False
 
@@ -465,7 +490,7 @@ class ElasticPlatform(AbstractPlatform):
         # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
             json_data["references"] = rule_content["references"]
-        if "elastic.bb" in tags:
+        if building_block:
             json_data["building_block_type"] = "default"
         if "falsepositives" in rule_content:
             json_data["false_positives"] = rule_content["falsepositives"]
@@ -534,7 +559,11 @@ class ElasticPlatform(AbstractPlatform):
         )
 
         index = self._index_name
-        if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
+        if (
+            rule_content
+            and "custom" in rule_content
+            and "raw_language" in rule_content["custom"]
+        ):
             language = rule_content["custom"]["raw_language"]
         print(language)
         if language == "esql":
