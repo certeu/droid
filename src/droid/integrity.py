@@ -86,7 +86,7 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
 def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error):
 
     try:
-        saved_search: dict = platform.get_search(rule_content, rule_file)
+        saved_search: dict = platform.get_rule(rule_content, rule_file)
     # Mapping rule_content with a MS Sentinel saved search properties
         mapping = {
             "id": "name",
@@ -144,7 +144,7 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
 
 def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
     try:
-        saved_search: dict = platform.get_search(rule_content["id"])
+        saved_search: dict = platform.get_rule(rule_content["id"])
     except Exception as e:
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
         return error
@@ -156,6 +156,9 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
         error = True
         return error
 
+    if "metadata _id, _index, _version" not in rule_converted.lower() and "metadata _id, _index, _version" in saved_search["query"].lower():
+        saved_search["query"] = saved_search["query"].replace('  METADATA _id, _index, _version', '')
+
     result = {
         "name": saved_search["name"],
         "description": saved_search["description"],
@@ -163,6 +166,7 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
     }
 
     rule_content["detection"] = rule_converted
+
     mapping = {
         #"id": "name", # Not sure why this is here?
         "detection": "query",

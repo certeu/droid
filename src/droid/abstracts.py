@@ -21,6 +21,13 @@ class AbstractPlatform(ABC):
         raise NotImplemented()
 
     @abstractmethod
+    def get_rule(self):
+        """
+        Get the parameter from a rule. This method should be implemented by subclasses.
+        """
+        raise NotImplemented()
+
+    @abstractmethod
     def remove_rule(self):
         """
         Remove a rule. This method should be implemented by subclasses.

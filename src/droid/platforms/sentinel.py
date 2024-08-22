@@ -30,7 +30,8 @@ class SentinelPlatform(AbstractPlatform):
 
         super().__init__(name="Sentinel")
 
-        super().__init__(parameters)
+        self._parameters = parameters
+
         self._debug = debug
         self._json = json
 
@@ -241,7 +242,7 @@ class SentinelPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(f"Rule {rule_file} error: {e}")
 
-    def get_search(self, rule_content, rule_file):
+    def get_rule(self, rule_content, rule_file):
         """Retrieve a scheduled alert rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """
@@ -270,7 +271,7 @@ class SentinelPlatform(AbstractPlatform):
             self.logger.error(f"Could not retrieve the rule {rule_file}")
             raise
 
-    def remove_search(self, rule_content, rule_converted, rule_file):
+    def remove_rule(self, rule_content, rule_converted, rule_file):
         """Remove an analytic rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """

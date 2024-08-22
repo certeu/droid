@@ -271,7 +271,7 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return False
 
-    def get_search(self, rule_id):
+    def get_rule(self, rule_id):
         params = {
             "rule_id": rule_id,
         }
@@ -328,7 +328,7 @@ class ElasticPlatform(AbstractPlatform):
         return False
 
     def kibana_import_rule(self, json_data, rule_content):
-        existing_rule = self.get_search(json_data["rule_id"])
+        existing_rule = self.get_rule(json_data["rule_id"])
         if existing_rule and existing_rule["language"] != json_data["language"]:
             self.remove_rule(rule_content)
             self.logger.warning(
@@ -337,7 +337,7 @@ class ElasticPlatform(AbstractPlatform):
             existing_rule = False
         if existing_rule:
             if self.check_rule_changes(existing_rule, json_data):
-                
+
                 params = {
                     "overwrite": "true",
                 }
@@ -404,7 +404,7 @@ class ElasticPlatform(AbstractPlatform):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
         """
-        
+
         threat = []
         tags = []
         if "tags" in rule_content and rule_content["tags"]:
@@ -510,8 +510,8 @@ class ElasticPlatform(AbstractPlatform):
             }
         except Exception as e:
             print(e)
-             
-        
+
+
         # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
             json_data["references"] = rule_content["references"]
@@ -519,7 +519,7 @@ class ElasticPlatform(AbstractPlatform):
             json_data["building_block_type"] = "default"
         if "falsepositives" in rule_content:
             json_data["false_positives"] = rule_content["falsepositives"]
-        
+
         try:
             self.kibana_import_rule(json_data, rule_content)
             self.logger.info(

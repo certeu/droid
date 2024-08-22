@@ -155,7 +155,7 @@ def droid_platform_config(args, config_path):
 
         return config_splunk
 
-    if args.platform == 'azure' or args.platform == 'defender':
+    if args.platform == 'azure' or args.platform == 'microsoft_defender':
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()

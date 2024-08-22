@@ -184,6 +184,23 @@ class SplunkPlatform(AbstractPlatform):
 
         return group_match
 
+
+    def get_rule(self, rule_content: dict, rule_converted: str, rule_file: str):
+
+        alert_name = rule_content["title"]
+
+        service = client.connect(
+            host= self._url,
+            port=self._port,
+            username=self._user,
+            password=self._password,
+            app=self._app)
+
+        if self.search_savedsearch(rule_content): # If the rule already exists
+            return self.search_savedsearch(rule_content)
+        else:
+            return False
+
     def create_rule(self, rule_content: dict, rule_converted: str, rule_file: str):
         earliest_time = self._earliest_time
         latest_time = self._latest_time
