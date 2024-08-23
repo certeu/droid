@@ -121,7 +121,7 @@ class ElasticPlatform(AbstractPlatform):
         if "building_block_prefix" in self._parameters:
             self._building_block_prefix = self._parameters["building_block_prefix"]
         else:
-            self._building_block_prefix = "BB - "
+            self._building_block_prefix = "BB"
 
         if self._kibana_ca:
             self._tls_verified = self._kibana_ca
@@ -440,7 +440,7 @@ class ElasticPlatform(AbstractPlatform):
         else:
             display_name = rule_content["title"]
         if building_block:
-            display_name = self._building_block_prefix + display_name
+            display_name = self._building_block_prefix + " - " + display_name
         # Handling the status of the alert
 
         if rule_content.get("custom", {}).get("disabled") is True:
