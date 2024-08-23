@@ -21,15 +21,15 @@ from elasticsearch import Elasticsearch
 
 logger = ColorLogger("droid.platforms.elastic")
 
-
 class ElasticPlatform(AbstractPlatform):
 
     def __init__(
         self, parameters: dict, debug: bool, json: bool, language: str, raw: bool=False
     ) -> None:
         super().__init__(name="Elastic")
-        self._parameters = parameters
 
+        self._parameters = parameters
+        self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
         self._debug = debug
         self._json = json
 
@@ -37,7 +37,7 @@ class ElasticPlatform(AbstractPlatform):
             raise ValueError("ElasticPlatform: 'kibana_url' is not set.")
 
         if "elastic_hosts" not in self._parameters:
-            logger.error(
+            self.logger.error(
                 "ElasticPlatform: 'elastic_hosts' is not set. Searching will not be available"
             )
             self._parameters["elastic_hosts"] = []
@@ -47,7 +47,7 @@ class ElasticPlatform(AbstractPlatform):
             self._parameters["elastic_ca"] = None
         if "elastic_tls_verify" not in self._parameters:
             self._parameters["elastic_tls_verify"] = False
-            logger.warning(
+            self.logger.warning(
                 "ElasticPlatform: 'elastic_tls_verify' is not set. Defaulting to not verifying TLS"
             )
 
@@ -57,34 +57,34 @@ class ElasticPlatform(AbstractPlatform):
             self._parameters["tls_verify"] = True
 
         if "schedule_interval" not in self._parameters:
-            logger.debug(
+            self.logger.debug(
                 "ElasticPlatform: 'schedule_interval' is not set, using default of 1."
             )
             self._parameters["schedule_interval"] = "1"
 
         if "schedule_interval_unit" not in self._parameters:
-            logger.debug(
+            self.logger.debug(
                 "ElasticPlatform: 'schedule_interval_unit' is not set, using default of h."
             )
             self._parameters["schedule_interval_unit"] = "h"
 
         if "license" not in self._parameters:
-            logger.debug("ElasticPlatform: 'license' is not set, using default of DRL.")
+            self.logger.debug("ElasticPlatform: 'license' is not set, using default of DRL.")
             self._parameters["license"] = "DRL"
 
         if "eql_search_range_gte" not in self._parameters:
-            logger.debug(
+            self.logger.debug(
                 "ElasticPlatform: 'eql_search_range_gte' is not set, using default of 24h."
             )
             self._parameters["eql_search_range_gte"] = "now-24h"
         if "esql_search_range_gte" not in self._parameters:
-            logger.debug(
+            self.logger.debug(
                 "ElasticPlatform: 'esql_search_range_gte' is not set, using default of 1h."
             )
             self._parameters["esql_search_range_gte"] = "now-1h"
 
         if "legacy_esql" not in self._parameters:
-            logger.debug(
+            self.logger.debug(
                 "ElasticPlatform: 'legacy_esql' is not set, using default of False."
             )
             self._parameters["legacy_esql"] = False
@@ -245,11 +245,11 @@ class ElasticPlatform(AbstractPlatform):
                             index_found = True
                             break
         else:
-            logger.warning(
+            self.logger.warning(
                 "No logsource found in the rule, using default index 'logs-*'"
             )
         if not index_found:
-            logger.warning(
+            self.logger.warning(
                 "No index value found for the rule, using default index 'logs-*'"
             )
         if isinstance(index_value, str):
@@ -258,7 +258,7 @@ class ElasticPlatform(AbstractPlatform):
         elif isinstance(index_value, list):
             self._index_name = index_value
         else:
-            logger.error("Index name in pipeline is missing or malformed")
+            self.logger.error("Index name in pipeline is missing or malformed")
             raise
 
     def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
@@ -329,12 +329,12 @@ class ElasticPlatform(AbstractPlatform):
                 fields.append("building_block_type")
             for field in fields:
                 if existing_rule[field] != new_rule[field]:
-                    logger.info(f"Rule '{new_rule['name']}' has changed")
+                    self.logger.info(f"Rule '{new_rule['name']}' has changed")
                     return True
         except Exception as e:
-            logger.error(f"Error while checking rule changes {e}")
+            self.logger.error(f"Error while checking rule changes {e}")
             return True
-        logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
+        self.logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
         return False
 
     def kibana_import_rule(self, json_data, rule_content):
@@ -406,7 +406,7 @@ class ElasticPlatform(AbstractPlatform):
             else:
                 query = re.sub(r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query)
         except Exception as e:
-            logger.error(f"Error while preparing rule for deduplication {e}")
+            self.logger.error(f"Error while preparing rule for deduplication {e}")
         return query
 
 
@@ -486,7 +486,6 @@ class ElasticPlatform(AbstractPlatform):
         try:
             # Build the json_data for kibana import
             json_data = {
-                # "id": rule_content["id"],
                 "name": display_name,
                 "enabled": enabled,
                 "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
@@ -563,10 +562,10 @@ class ElasticPlatform(AbstractPlatform):
         search_id = response["id"]
         es_client.eql.get_status(id=search_id)
         while es_client.eql.get_status(id=search_id)["is_running"]:
-            logger.debug(f"Query {search_id} is still running")
+            self.logger.debug(f"Query {search_id} is still running")
             # print(es_client.eql.get_status(id=search_id))
             time.sleep(10)
-        logger.debug(f"Query {search_id} is done")
+        self.logger.debug(f"Query {search_id} is done")
         results = es_client.eql.get(id=search_id)
         es_client.eql.delete(id=search_id)
         if "hits" in results:
