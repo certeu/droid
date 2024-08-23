@@ -6,6 +6,7 @@ import yaml
 from pathlib import Path
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
+from droid.platforms.elastic import ElasticPlatform
 from droid.color import ColorLogger
 from droid.export import post_rule_content
 
@@ -85,7 +86,7 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
 def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error):
 
     try:
-        saved_search: dict = platform.get_search(rule_content, rule_file)
+        saved_search: dict = platform.get_rule(rule_content, rule_file)
     # Mapping rule_content with a MS Sentinel saved search properties
         mapping = {
             "id": "name",
@@ -140,6 +141,71 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
     if error:
         return error
 
+
+def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
+    try:
+        saved_search: dict = platform.get_rule(rule_content["id"])
+    except Exception as e:
+        logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
+        return error
+
+    if saved_search:
+        logger.info(f"Successfully retrieved the rule {rule_file}")
+    else:
+        logger.error(f"Rule not found {rule_file}")
+        error = True
+        return error
+
+    if "metadata _id, _index, _version" not in rule_converted.lower() and "metadata _id, _index, _version" in saved_search["query"].lower():
+        saved_search["query"] = saved_search["query"].replace('  METADATA _id, _index, _version', '')
+
+    result = {
+        "name": saved_search["name"],
+        "description": saved_search["description"],
+        "query": saved_search["query"]
+    }
+
+    rule_content["detection"] = rule_converted
+
+    mapping = {
+        #"id": "name", # Not sure why this is here?
+        "detection": "query",
+        "description": "description"
+    }
+    for key in mapping:
+
+        rule_key = key
+        result_key = mapping[key]
+
+        if rule_content.get(rule_key) == result.get(result_key):
+            if parameters.debug:
+                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+        else:
+            logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
+            error = True
+
+    # Check if disabled
+    if "custom" in rule_content and "disabled" in rule_content["custom"]:
+        is_disabled = rule_content["custom"]["disabled"]
+    else:
+        is_disabled = False
+
+    if is_disabled and not rule_content["enabled"]:
+        logger.info("The rule is disabled as expected")
+    elif is_disabled and rule_content["enabled"]:
+        logger.error("The rule is not disabled on the platform")
+        error = True
+    elif is_disabled is None and not rule_content["enabled"]:
+        logger.error("The rule is not enabled on the platform")
+        error = True
+    elif is_disabled is None and rule_content["enabled"]:
+        logger.info("The rule is enabled as expected")
+
+    if error:
+        return error
+
+
+
 def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error):
 
     logger = ColorLogger("droid.integrity")
@@ -154,7 +220,9 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     if parameters.platform == 'splunk':
         error = integrity_rule_splunk(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-
+    elif parameters.platform in ["esql", "eql"]:
+        error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
+        return error
     elif 'azure' or 'defender' in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error

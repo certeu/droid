@@ -39,7 +39,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql', 'eql'])
     parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
     parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
@@ -82,14 +82,16 @@ def is_raw_rule(args, base_config):
             exit(1)
     else:
         return False
-
     if (
         (args.platform in ['splunk', 'azure'] or
         (args.platform == 'microsoft_defender' and args.sentinel_mde)) and
         (raw_rule_folder_name in args.rules and args.platform in args.rules)
     ):
         return True
-
+    elif args.platform in ['esql', 'eql'] and raw_rule_folder_name in args.rules:
+        return True
+    elif args.platform in ['esql', 'eql']:
+        return False
     elif (
         args.platform in ['splunk', 'azure'] or
         (args.platform == 'microsoft_defender' and args.sentinel_mde)
@@ -153,8 +155,7 @@ def droid_platform_config(args, config_path):
 
         return config_splunk
 
-    if 'azure' or 'defender' in args.platform:
-
+    if args.platform == 'azure' or args.platform == 'microsoft_defender':
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()
@@ -225,6 +226,32 @@ def droid_platform_config(args, config_path):
 
         return config
 
+    if args.platform in ['esql', 'eql']:
+
+        try:
+            with open(config_path) as file_obj:
+                content = file_obj.read()
+                config_data = tomllib.loads(content)
+                config_elastic = config_data["platforms"]["elastic"]
+        except Exception as e:
+            raise Exception(f"Something unexpected happened: {e}")
+
+        if config_elastic["auth_method"] == "basic":
+            if args.export or args.search or args.integrity:
+                if environ.get('DROID_ELASTIC_USERNAME'):
+                    username = environ.get('DROID_ELASTIC_USERNAME')
+                    config_elastic["username"] = username
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
+                if environ.get('DROID_ELASTIC_PASSWORD'):
+                    password = environ.get('DROID_ELASTIC_PASSWORD')
+                    config_elastic["password"] = password
+                else:
+                    raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
+
+        return config_elastic
+
+
 def main(argv=None) -> None:
     """Main function
 
@@ -255,7 +282,6 @@ def main(argv=None) -> None:
         raise Exception(f"Error: configuration file {args.config_file} not found.")
     else:
         config_path = args.config_file
-
     if args.validate:
 
         logger.info(f"Validation mode was selected - path selected: {args.rules}")
@@ -309,7 +335,7 @@ def main(argv=None) -> None:
             search_error, search_warning = search_rule_raw(parameters, droid_platform_config(args, config_path))
         else:
             logger.info(f"Searching Sigma rule for platform {args.platform} selected")
-            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path))
+            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         if search_error and search_warning:
             logger.warning("Hits found while search one or multiple rules")
@@ -338,25 +364,33 @@ def main(argv=None) -> None:
                 logger.info("Splunk raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == 'azure':
             if is_raw_rule(args, base_config):
                 logger.info("Azure Sentinel raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == 'microsoft_defender' and args.sentinel_mde:
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft Defender for Endpoint raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path))
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == "microsoft_defender" and not args.sentinel_mde:
             logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
             exit(1)
+
+        elif args.platform == 'esql' or args.platform == 'eql':
+            args.platform == 'elastic'
+            if is_raw_rule(args, base_config):
+                logger.info("Elastic Security raw rule selected")
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+            else:
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         else:
             logger.error("Please select one platform. See option -p in --help")
@@ -390,7 +424,7 @@ def main(argv=None) -> None:
             integrity_error = integrity_rule_raw(parameters, droid_platform_config(args, config_path))
         else:
             logger.info(f"Integrity check for platform {args.platform} selected")
-            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path))
+            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         if integrity_error:
             logger.error("Integrity error")

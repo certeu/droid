@@ -13,6 +13,7 @@ from droid.export import export_rule
 from droid.integrity import integrity_rule
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
+from droid.platforms.elastic import ElasticPlatform
 from droid.color import ColorLogger
 
 class Conversion:
@@ -80,7 +81,7 @@ class Conversion:
         Args:
             rule
         """
-        with open(rule_file, "r") as file:
+        with open(rule_file, "r", encoding="utf-8") as file:
             if self._filters_directory:
                 sigma_rule = self.init_sigma_filters(rule_file)
             else:
@@ -88,7 +89,7 @@ class Conversion:
 
         return sigma_rule
 
-    def convert_rule(self, rule_content, rule_file):
+    def convert_rule(self, rule_content, rule_file, platform):
 
         plugins = InstalledSigmaPlugins.autodiscover()
         backends = plugins.backends
@@ -121,6 +122,9 @@ class Conversion:
             backend: Backend = backend_class(processing_pipeline=pipeline)
             sigma_rule = self.init_sigma_rule(rule_file)
             rule_converted = backend.convert(sigma_rule, self._format)[0]
+            # For esql and eql backend only
+            if isinstance(platform, ElasticPlatform):
+                platform.get_index_name(pipeline, rule_content)
             self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
             return rule_converted
         else:
@@ -128,7 +132,7 @@ class Conversion:
 
 def load_rule(rule_file):
 
-    with open(rule_file, 'r') as stream:
+    with open(rule_file, 'r', encoding="utf-8") as stream:
         try:
             object = list(yaml.safe_load_all(stream))[0]
             if 'fields' in object:
@@ -179,6 +183,10 @@ def convert_rules(parameters, droid_config, base_config):
         target = Conversion(droid_config, base_config, platform_name, parameters.debug, parameters.json)
         if platform_name == 'splunk':
             platform = SplunkPlatform(droid_config, parameters.debug, parameters.json)
+        elif 'esql' in platform_name:
+            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "esql", raw=False)
+        elif 'eql' in platform_name:
+            platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "eql", raw=False)
         elif 'azure' or 'defender' in platform_name:
             platform = SentinelPlatform(droid_config, parameters.debug, parameters.json)
 
@@ -229,7 +237,7 @@ def convert_rules(parameters, droid_config, base_config):
 def convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules):
 
     try:
-        rule_converted = target.convert_rule(rule_content, rule_file)
+        rule_converted = target.convert_rule(rule_content, rule_file, platform)
 
         if parameters.debug:
             logger.debug(f"Rule {rule_file} converted into: {rule_converted}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
@@ -243,7 +251,10 @@ def convert_sigma(parameters, logger, rule_content, rule_file, target, platform,
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
-
+    except NotImplementedError as e:
+        logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        error = True
+        return error, search_warning
     except Exception as e:
             logger.error(f"Fatal error when compiling the rule {rule_file} - verify the backend {e} is installed")
             error = True

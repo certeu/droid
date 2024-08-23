@@ -18,25 +18,20 @@ from azure.mgmt.securityinsight.models import GroupingConfiguration
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 
 logger = ColorLogger("droid.platforms.sentinel")
 
-class SentinelBase:
-    """Sentinel base class
 
-    Base class for importing datasource/product data
-    """
-
-    def __init__(self, parameters: dict) -> None:
-        self.logger = ColorLogger("droid.platforms.sentinel.SentinelBase")
-        self._parameters = parameters
-
-class SentinelPlatform(SentinelBase):
+class SentinelPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
 
-        super().__init__(parameters)
+        super().__init__(name="Sentinel")
+
+        self._parameters = parameters
+
         self._debug = debug
         self._json = json
 
@@ -247,7 +242,7 @@ class SentinelPlatform(SentinelBase):
         except Exception as e:
             self.logger.error(f"Rule {rule_file} error: {e}")
 
-    def get_search(self, rule_content, rule_file):
+    def get_rule(self, rule_content, rule_file):
         """Retrieve a scheduled alert rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """
@@ -276,7 +271,7 @@ class SentinelPlatform(SentinelBase):
             self.logger.error(f"Could not retrieve the rule {rule_file}")
             raise
 
-    def remove_search(self, rule_content, rule_converted, rule_file):
+    def remove_rule(self, rule_content, rule_converted, rule_file):
         """Remove an analytic rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """
@@ -295,7 +290,7 @@ class SentinelPlatform(SentinelBase):
             self.logger.error(f"Could not delete the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
             raise
 
-    def create_search(self, rule_content, rule_converted, rule_file):
+    def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
         Create a scheduled alert rule in Sentinel
         """
