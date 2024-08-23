@@ -3,9 +3,12 @@ name: Test Build
 on:
   push:
     branches:
-      - '**'  # This will match any branch
+      - '**'
     tags:
-      - '*'  # This will match any tag
+      - '*'
+  pull_request:
+    paths:
+      - 'src/**'
 
 jobs:
   test_build:
