@@ -211,6 +211,17 @@ class ElasticPlatform(AbstractPlatform):
         index_value = "logs-*"
         index_found = False
         if "logsource" in rule_content:
+            matchlist = [
+                                    "category",
+                                    "custom_attributes",
+                                    "product",
+                                    "service",
+                                    "source",
+                                ]
+            matchlength = 0
+            for x in rule_content["logsource"]:
+                if x not in matchlist:
+                    matchlength += 1
             for item in pipeline.items:
                 if (
                     hasattr(item, "transformation")
@@ -223,16 +234,10 @@ class ElasticPlatform(AbstractPlatform):
                             rule_condition
                         ) in item.transformation.processing_item.rule_conditions:
                             for key, value in rule_content["logsource"].items():
-                                if key in [
-                                    "category",
-                                    "custom_attributes",
-                                    "product",
-                                    "service",
-                                    "source",
-                                ]:
+                                if key in matchlist:
                                     if rule_condition.logsource.__dict__[key] == value:
                                         matches += 1
-                        if matches == len(rule_content["logsource"]):
+                        if matches == matchlength:
                             index_value = item.transformation.val
                             self.logger.info(
                                 f"The value of the key 'index' is: {index_value}"
