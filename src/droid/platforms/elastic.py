@@ -2,13 +2,11 @@
 Module for Elastic Security
 """
 
-from droid.color import ColorLogger
-import io
-import json
 import re
 import time
-from pprint import pprint
 import requests
+
+from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
 from requests.auth import HTTPBasicAuth
 from sigma.data.mitre_attack import (
@@ -16,7 +14,7 @@ from sigma.data.mitre_attack import (
     mitre_attack_techniques_tactics_mapping,
     mitre_attack_tactics,
 )
-import os
+
 from elasticsearch import Elasticsearch
 
 logger = ColorLogger("droid.platforms.elastic")
@@ -210,56 +208,45 @@ class ElasticPlatform(AbstractPlatform):
     def get_index_name(self, pipeline, rule_content):
         index_value = "logs-*"
         index_found = False
+
         if "logsource" in rule_content:
-            matchlist = [
-                                    "category",
-                                    "custom_attributes",
-                                    "product",
-                                    "service",
-                                    "source",
-                                ]
-            matchlength = 0
-            for x in rule_content["logsource"]:
-                if x not in matchlist:
-                    matchlength += 1
+            matchlist = ["category", "custom_attributes", "product", "service", "source"]
+            matchlength = sum(1 for x in rule_content["logsource"] if x in matchlist)
+
             for item in pipeline.items:
                 if (
                     hasattr(item, "transformation")
                     and hasattr(item.transformation, "key")
                     and hasattr(item.transformation, "val")
+                    and item.transformation.key == "index"
                 ):
-                    if item.transformation.key == "index":
-                        matches = 0
-                        for (
-                            rule_condition
-                        ) in item.transformation.processing_item.rule_conditions:
-                            for key, value in rule_content["logsource"].items():
-                                if key in matchlist:
-                                    if rule_condition.logsource.__dict__[key] == value:
-                                        matches += 1
-                        if matches == matchlength:
-                            index_value = item.transformation.val
-                            self.logger.info(
-                                f"The value of the key 'index' is: {index_value}"
-                            )
-                            index_found = True
-                            break
+                    matches = 0
+
+                    for rule_condition in item.transformation.processing_item.rule_conditions:
+                        for key, value in rule_content["logsource"].items():
+                            if key in matchlist:
+                                condition_value = getattr(rule_condition.logsource, key, None)
+                                if condition_value is None or condition_value == value:
+                                    matches += 1
+
+                    if matches == matchlength:
+                        index_value = item.transformation.val
+                        self.logger.info(f"The value of the key 'index' is: {index_value}")
+                        index_found = True
+                        break
         else:
-            self.logger.warning(
-                "No logsource found in the rule, using default index 'logs-*'"
-            )
+            self.logger.warning("No logsource found in the rule, using default index 'logs-*'")
+
         if not index_found:
-            self.logger.warning(
-                "No index value found for the rule, using default index 'logs-*'"
-            )
+            self.logger.warning("No index value found for the rule, using default index 'logs-*'")
+
         if isinstance(index_value, str):
-            self._index_name = []
-            self._index_name.append(index_value)
+            self._index_name = [index_value]
         elif isinstance(index_value, list):
             self._index_name = index_value
         else:
             self.logger.error("Index name in pipeline is missing or malformed")
-            raise
+            raise ValueError("Index name in pipeline is missing or malformed")
 
     def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
         """Remove an analytic rule in Elastic"""
