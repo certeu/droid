@@ -190,7 +190,7 @@ def convert_rules(parameters, droid_config, base_config):
             platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "eql", raw=False)
         elif 'azure' in platform_name:
             platform = SentinelPlatform(droid_config, parameters.debug, parameters.json)
-        elif parameters.platform == 'Microsoft365DefenderBackend':
+        elif parameters.platform == 'microsoft365defender':
             platform = MicrosoftXDRPlatform(droid_config, parameters.debug, parameters.json)
 
     if path.is_dir():
