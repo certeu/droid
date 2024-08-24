@@ -250,30 +250,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             severity = rule_content["level"]
 
-        # Handling the tactic
-        if rule_content["tags"]:
-            attack_tags = next(
-                (
-                    tag
-                    for tag in rule_content.get("tags", [])
-                    if tag.startswith("attack.t")
-                ),
-                None,
-            )
-            t_value = re.match(r"attack\.([tT][0-9]+)\.*.*", attack_tags)
-            if t_value:
-                technique_id = t_value.group(1).upper()
-                tactics = None  # Temporary until sentinel allows to push technique IDs
-            else:
-                tactics = None
-        else:
-            tactics = None
-
+        # TODO: Handling the tactic
 
         alert_rule = {
             "displayName": display_name,
             "isEnabled": enabled,
-            "queryCondition": {"queryText": "DeviceProcessEvents | take 1"},
+            "queryCondition": {"queryText": rule_converted},
             "schedule": {"period": self._query_period.upper()},
             "detectionAction": {
                 "alertTemplate": {
@@ -283,21 +265,20 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     "category": "Execution",  # TODO: Add the correct category
                     "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                     "mitreTechniques": [],  # TODO: Check if f"tactics" works here
-                    "impactedAssets": [  # TODO: Decide what all to add here
-                        {
-                            "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
-                            "identifier": "deviceId",
-                        }
-                    ],
+                    "impactedAssets": [{'@odata.type': '#microsoft.graph.security.impactedDeviceAsset',
+                                                                      'identifier': 'deviceId'},
+                                                                     {'@odata.type': '#microsoft.graph.security.impactedMailboxAsset',
+                                                                      'identifier': 'initiatingProcessAccountUpn'},
+                                                                     {'@odata.type': '#microsoft.graph.security.impactedUserAsset',
+                                                                      'identifier': 'initiatingProcessAccountUpn'}],
                 },
                 "organizationalScope": None,  # TODO: Find out what this does
-                "responseActions": [],  # TODO: Find out what to add here
+                "responseActions": [],  # TODO: Define Actions in custom rule fields
             },
         }
 
-        
         try:
-            self.push_detection_rule(alert_rule=alert_rule, rule_content=rule_content)
+            self.push_detection_rule(alert_rule=alert_rule, rule_content=rule_content, rule_file=rule_file, rule_converted=rule_converted)
             # Send the JSON payload to Microsoft Graph Security API
 
         except Exception as e:
@@ -311,23 +292,38 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 },
             )
             raise
-    def push_detection_rule(self, alert_rule=None, rule_content=None):
-        rules = self.get_rule(rule_content['id'])
-        if rules:
-            self.logger.info("Rule already exists")
-        else:
-            api_url = self._api_base_url+"/security/rules/detectionRules"
-            headers = {
+    def push_detection_rule(self, alert_rule=None, rule_content=None, rule_file=None, rule_converted=None):
+        headers = {
                 "Authorization": f"Bearer {self._token}",
                 "Content-Type": "application/json",
             }
+        existing_rule = self.get_rule(rule_content['id'])
+        if existing_rule:
+            self.logger.info("Rule already exists")
+            api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
+            response = requests.patch(
+                api_url, headers=headers, json=alert_rule
+            )
+        else:
+            api_url = self._api_base_url+"/security/rules/detectionRules"
             response = requests.post(
                 api_url, headers=headers, json=alert_rule
             )
             
-            if response.status_code == 403:
+        if response.status_code == 403:
+            self.logger.error(
+                f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                    "error": response.json(),
+                },
+            )
+        elif response.status_code == 201 or 200:
+            if "error" in response.json():
                 self.logger.error(
-                    f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
+                    f"Could not export the rule {rule_file}",
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
@@ -335,7 +331,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "error": response.json(),
                     },
                 )
-            elif response.status_code == 201:
+                raise Exception(response.json())
+            else:
                 self.logger.info(
                     f"Successfully exported the rule {rule_file}",
                     extra={
@@ -344,9 +341,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "rule_content": rule_content,
                     },
                 )
-            else:
-                print(response.status_code)
-                pprint(response.json())
+        else:
+            print(response.status_code)
+            pprint(response.json())
 
     def _get(self, url=None, headers=None, params=None):
         # Send the JSON payload to Microsoft Graph Security API
