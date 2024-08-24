@@ -249,33 +249,34 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             severity = "high"
         else:
             severity = rule_content["level"]
-
         # TODO: Handling the tactic
-
-        alert_rule = {
-            "displayName": display_name,
-            "isEnabled": enabled,
-            "queryCondition": {"queryText": rule_converted},
-            "schedule": {"period": self._query_period.upper()},
-            "detectionAction": {
-                "alertTemplate": {
-                    "title": display_name,
-                    "description": rule_content["description"],
-                    "severity": severity,
-                    "category": "Execution",  # TODO: Add the correct category
-                    "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                    "mitreTechniques": [],  # TODO: Check if f"tactics" works here
-                    "impactedAssets": [{'@odata.type': '#microsoft.graph.security.impactedDeviceAsset',
-                                                                      'identifier': 'deviceId'},
-                                                                     {'@odata.type': '#microsoft.graph.security.impactedMailboxAsset',
-                                                                      'identifier': 'initiatingProcessAccountUpn'},
-                                                                     {'@odata.type': '#microsoft.graph.security.impactedUserAsset',
-                                                                      'identifier': 'initiatingProcessAccountUpn'}],
+        try:
+            alert_rule = {
+                "displayName": display_name,
+                "isEnabled": enabled,
+                "queryCondition": {"queryText": rule_converted},
+                "schedule": {"period": self._query_period.upper()},
+                "detectionAction": {
+                    "alertTemplate": {
+                        "title": display_name,
+                        "description": rule_content["description"],
+                        "severity": severity,
+                        "category": "Execution",  # TODO: Add the correct category
+                        "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
+                        "mitreTechniques": [],  # TODO: Check if f"tactics" works here
+                        "impactedAssets": [{'@odata.type': '#microsoft.graph.security.impactedDeviceAsset',
+                                                                        'identifier': 'deviceId'},
+                                                                        {'@odata.type': '#microsoft.graph.security.impactedMailboxAsset',
+                                                                        'identifier': 'initiatingProcessAccountUpn'},
+                                                                        {'@odata.type': '#microsoft.graph.security.impactedUserAsset',
+                                                                        'identifier': 'initiatingProcessAccountUpn'}],
+                    },
+                    "organizationalScope": None,  # TODO: Find out what this does
+                    "responseActions": [],  # TODO: Define Actions in custom rule fields
                 },
-                "organizationalScope": None,  # TODO: Find out what this does
-                "responseActions": [],  # TODO: Define Actions in custom rule fields
-            },
-        }
+            }
+        except Exception as e:
+            self.logger.error(e)
 
         try:
             self.push_detection_rule(alert_rule=alert_rule, rule_content=rule_content, rule_file=rule_file, rule_converted=rule_converted)
@@ -309,8 +310,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             response = requests.post(
                 api_url, headers=headers, json=alert_rule
             )
-            
-        if response.status_code == 403:
+        if response.status_code == 400:
+            self.logger.error(
+                f"Could not export the rule {rule_file} due to a bad request. {response.json()['error']['message']}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                    "error": response.json(),
+                },
+            )
+        elif response.status_code == 403:
             self.logger.error(
                 f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
                 extra={
