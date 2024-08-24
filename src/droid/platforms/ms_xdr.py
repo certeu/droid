@@ -42,7 +42,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._tenant_id = self._parameters["tenant_id"]
         self._client_id = self._parameters["client_id"]
         self._client_secret = self._parameters["client_secret"]
-
+        self._api_base_url = "https://graph.microsoft.com/beta"
+        self._token = self.acquire_token()
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
@@ -156,31 +157,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(f"Rule {rule_file} error: {e}")
 
-    def get_rule(self, rule_content, rule_file):
+    def get_rule(self, rule_id):
         """Retrieve a scheduled alert rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """
-        credential = self.get_credentials()
-
-        client = SecurityInsights(credential, self._subscription_id)
-
         try:
-            rule = client.alert_rules.get(
-                resource_group_name=self._resource_group,
-                workspace_name=self._workspace_name,
-                rule_id=rule_content["id"],
-            )
-            self.logger.info(f"Successfully retrieved the rule {rule_file}")
-
-            if rule:
-                return rule
+            params = {"$filter": f"contains(displayName, '{rule_id}')"}
+            rule = self._get(url="/security/rules/detectionRules", params=params)
+            if len(rule["value"]) > 0:
+                return rule["value"][0]
             else:
                 return None
-
-        except ResourceNotFoundError:
-            self.logger.error(f"Rule not found {rule_file}")
-            return None
-
         except Exception as e:
             self.logger.error(f"Could not retrieve the rule {rule_file}")
             raise
@@ -245,10 +232,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         """
 
         # Handling the display name
+        display_name = rule_content["title"] + " - " + rule_content["id"]
         if self._alert_prefix:
-            display_name = self._alert_prefix + " - " + rule_content["title"]
-        else:
-            display_name = rule_content["title"]
+            display_name = self._alert_prefix + " - " + display_name
 
         # Handling the status of the alert
 
@@ -283,6 +269,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             tactics = None
 
+
         alert_rule = {
             "displayName": display_name,
             "isEnabled": enabled,
@@ -308,31 +295,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             },
         }
 
-        token = self.acquire_token()
-
+        
         try:
+            self.push_detection_rule(alert_rule=alert_rule, rule_content=rule_content)
             # Send the JSON payload to Microsoft Graph Security API
-            api_url = "https://graph.microsoft.com/beta/security/rules/detectionRules"
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-            response = requests.post(
-                api_url, headers=headers, json=alert_rule
-            )
-            print(response.status_code)
-            if response.status_code == 403:
-                self.logger.error(
-                    f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
-                    extra={
-                        "rule_file": rule_file,
-                        "rule_converted": rule_converted,
-                        "rule_content": rule_content,
-                        "error": response.json(),
-                    },
-                )
-            else:
-                pprint(response.json())
 
         except Exception as e:
             self.logger.error(
@@ -345,3 +311,54 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 },
             )
             raise
+    def push_detection_rule(self, alert_rule=None, rule_content=None):
+        rules = self.get_rule(rule_content['id'])
+        if rules:
+            self.logger.info("Rule already exists")
+        else:
+            api_url = self._api_base_url+"/security/rules/detectionRules"
+            headers = {
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            }
+            response = requests.post(
+                api_url, headers=headers, json=alert_rule
+            )
+            
+            if response.status_code == 403:
+                self.logger.error(
+                    f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                        "error": response.json(),
+                    },
+                )
+            elif response.status_code == 201:
+                self.logger.info(
+                    f"Successfully exported the rule {rule_file}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                    },
+                )
+            else:
+                print(response.status_code)
+                pprint(response.json())
+
+    def _get(self, url=None, headers=None, params=None):
+        # Send the JSON payload to Microsoft Graph Security API
+        
+        api_url = self._api_base_url + url
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        if headers:
+            headers.update(headers)
+        response = requests.get(
+            api_url, headers=headers, params=params
+        )
+        return response.json()
