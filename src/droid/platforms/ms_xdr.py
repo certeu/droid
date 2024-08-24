@@ -173,38 +173,36 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise
 
     def remove_rule(self, rule_content, rule_converted, rule_file):
-        """Remove an analytic rule in Sentinel
-        Remove a scheduled alert rule in Sentinel
         """
-        credential = self.get_credentials()
-
-        client = SecurityInsights(credential, self._subscription_id)
-
-        try:
-            client.alert_rules.delete(
-                resource_group_name=self._resource_group,
-                workspace_name=self._workspace_name,
-                rule_id=rule_content["id"],
-            )
-            self.logger.info(
-                f"Successfully deleted the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                },
-            )
-        except Exception as e:
-            self.logger.error(
-                f"Could not delete the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": e,
-                },
-            )
-            raise
+        Remove a Custom Detection Rule in Microsoft XDR
+        """
+        existing_rule = self.get_rule(rule_content['id'])
+        pprint(existing_rule)
+        if existing_rule:
+            try:
+                api_url =f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
+                headers = {
+                    "Authorization": f"Bearer {self._token}",
+                    "Content-Type": "application/json",
+                }
+                if headers:
+                    headers.update(headers)
+                response = requests.delete(
+                    api_url, headers=headers
+                )
+                if "error" in response.json():
+                    logger.error(f"Could not delete the rule {rule_file}. \nError: {response.json()['error']['message']}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": response.json()})
+            except Exception as e:
+                self.logger.error(
+                    f"Could not delete the rule {rule_file}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                        "error": e,
+                    },
+                )
+                raise
 
     def acquire_token(self):
         # MSAL configuration
@@ -240,7 +238,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         if rule_content.get("custom", {}).get("disabled") is True:
             enabled = False
-            self.logger.info(f"Successfully disabled the rule {rule_file}")
+            self.logger.info(f"Disabling the rule {rule_file}")
         else:
             enabled = True
 
@@ -310,6 +308,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             response = requests.post(
                 api_url, headers=headers, json=alert_rule
             )
+
         if response.status_code == 400:
             self.logger.error(
                 f"Could not export the rule {rule_file} due to a bad request. {response.json()['error']['message']}",
