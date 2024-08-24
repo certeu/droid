@@ -61,6 +61,26 @@ def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, 
         error = True
         return error, search_warning
 
+def search_rule_ms_xdr(rule_converted, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
+
+    try:
+        result: int = platform.run_xdr_search(rule_converted, rule_file)
+
+        logger.info(f"Successfully searched the rule {rule_file}")
+
+        if result > 0: # If the rule has match
+            logger.warning(f'(Microsoft XDR) Match found for {rule_file}')
+            search_warning = True
+            return error, search_warning
+        else:
+            logger.info(f"(Microsoft XDR) No hits for {rule_file}")
+            return error, search_warning
+
+    except Exception as e:
+        logger.error(f"Couldn't search for the rule {rule_file} - error {e}")
+        error = True
+        return error, search_warning
+
 def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, parameters, logger, error, search_warning, rule_content, platform_name):
 
     try:
@@ -103,7 +123,10 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
                                                     parameters, logger, error, search_warning,
                                                     rule_content, parameters.platform)
         return error, search_warning
-    elif 'azure' or 'defender' in parameters.platform: # TODO: Split up to sentinel and microsoft_defender
+    elif parameters.platform == 'microsoft_defender':
+        error, search_warning = search_rule_ms_xdr(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
+        return error, search_warning
+    elif 'azure' in parameters.platform:
         if parameters.mssp:
             error, search_warning = search_rule_sentinel(rule_converted, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=True)
             return error, search_warning

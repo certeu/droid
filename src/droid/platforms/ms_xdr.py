@@ -77,94 +77,18 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         return customer, result
 
-    def run_xdr_search(self, rule_converted, rule_file, mssp_mode):
-        # TODO: Do it...
-        return None
-
-        credential = self.get_credentials()
-
+    def run_xdr_search(self, rule_converted, rule_file):
+        payload = {"Query": rule_converted, "Timespan": "P1D"}
         try:
-            if self._debug:
-                self.logger.debug("Creating the client instance")
-            client = LogsQueryClient(credential)
-            if self._debug:
-                self.logger.debug("Successfully created the client instance")
-        except HttpResponseError as e:
-            self.logger.error(f"Error while connecting to Azure error: {e}")
-
-        current_time = datetime.now(timezone.utc)
-
-        start_time = current_time - timedelta(days=self._days_ago)
-
-        try:
-            if mssp_mode:
-                results = {}
-                client_workspaces = self.get_workspaces(credential)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                    futures = {
-                        executor.submit(
-                            self.mssp_run_xdr_search,
-                            client,
-                            rule_converted,
-                            start_time,
-                            current_time,
-                            customer_info,
-                        ): customer_info
-                        for customer_info in client_workspaces
-                    }
-
-                    for future in concurrent.futures.as_completed(futures):
-                        customer_info = futures[future]
-                        customer, result = future.result()
-                        results[customer] = result
-
-                # Process
-                total_result = 0
-
-                for customer, result in results.items():
-                    if result > 0:
-                        self.logger.warning(
-                            f"(Sentinel MSSP) Results for {customer}: {result}, {rule_file}"
-                        )
-                    else:
-                        self.logger.info(
-                            f"(Sentinel MSSP) No results for {customer}, {rule_file}"
-                        )
-                    total_result += result
-
-                return total_result
-
+            results = self._post(url="/security/runHuntingQuery", payload=payload)
+            if "error" in results:
+                self.logger.error(f"Error while running the query {results['error']['message']}")
+                return 0
             else:
-                if self._debug:
-                    self.logger.debug(f"Querying the workspace {self._workspace_id}")
-                results = client.query_workspace(
-                    self._workspace_id,
-                    rule_converted,
-                    timespan=(start_time, current_time),
-                    server_timeout=self._timeout,
-                )
-
-            if results.status == LogsQueryStatus.PARTIAL:
-                error = results.partial_error
-                data = results.partial_data
-                self.logger.error(f"Rule {rule_file} partial error in query: {error}")
-
-            elif results.status == LogsQueryStatus.SUCCESS:
-
-                total_result = 0
-
-                for (
-                    table
-                ) in results.tables:  # results.tables contains the ... results :eyes:
-                    total_result += len(table.rows)
-
-                return total_result
-
-        except HttpResponseError as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
-
+                return len(results["results"])
         except Exception as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
+            self.logger.error(f"Error while running the query {e}")
+            return 0
 
     def get_rule(self, rule_id):
         """Retrieve a scheduled alert rule in Sentinel
@@ -178,7 +102,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             else:
                 return None
         except Exception as e:
-            self.logger.error(f"Could not retrieve the rule {rule_file}")
+            self.logger.error(f"Error while searching for rule id {rule_id}")
             raise
 
     def remove_rule(self, rule_content, rule_converted, rule_file):
@@ -415,5 +339,19 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             headers.update(headers)
         response = requests.get(
             api_url, headers=headers, params=params
+        )
+        return response.json()
+    def _post(self, url=None, payload=None, headers=None, params=None):
+        # Send the JSON payload to Microsoft Graph Security API
+        
+        api_url = self._api_base_url + url
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        if headers:
+            headers.update(headers)
+        response = requests.post(
+            api_url, headers=self._headers, json=payload
         )
         return response.json()
