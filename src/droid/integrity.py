@@ -226,7 +226,7 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     elif 'azure' in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif parameters.platform == 'microsoft_defender': # TODO: Add Integrity check for Microsoft 365 Defender
+    elif parameters.platform == 'microsoft365defender': # TODO: Add Integrity check for Microsoft 365 Defender
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
 
@@ -240,7 +240,7 @@ def integrity_rule_raw(parameters: dict, export_config: dict, raw_rule=False):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
+    elif parameters.platform == 'microsoft365defender' and parameters.sentinel_mde:
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():

@@ -123,7 +123,7 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
                                                     parameters, logger, error, search_warning,
                                                     rule_content, parameters.platform)
         return error, search_warning
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == 'microsoft365defender':
         error, search_warning = search_rule_ms_xdr(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
         return error, search_warning
     elif 'azure' in parameters.platform:
@@ -145,7 +145,7 @@ def search_rule_raw(parameters: dict, export_config: dict):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == 'microsoft365defender':
         platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():
