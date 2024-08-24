@@ -4,7 +4,7 @@ Module for Microsoft XDR
 
 import concurrent.futures
 import re
-
+from pprint import pprint
 import asyncio
 import msal
 import requests
@@ -287,7 +287,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             "displayName": display_name,
             "isEnabled": enabled,
             "queryCondition": {"queryText": "DeviceProcessEvents | take 1"},
-            "schedule": {"period": self._query_period},
+            "schedule": {"period": self._query_period.upper()},
             "detectionAction": {
                 "alertTemplate": {
                     "title": display_name,
@@ -318,16 +318,22 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 "Content-Type": "application/json",
             }
             response = requests.post(
-                api_url, headers=headers, data=json.dumps(alert_rule)
+                api_url, headers=headers, json=alert_rule
             )
-
-            # Check the response
-            if response.status_code == 201:
-                print("Alert rule created successfully.")
-            else:
-                print(
-                    f"Failed to create alert rule: {response.status_code} - {response.text}"
+            print(response.status_code)
+            if response.status_code == 403:
+                self.logger.error(
+                    f"Could not export the rule {rule_file} due to insufficient permissions. {response.json()}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                        "error": response.json(),
+                    },
                 )
+            else:
+                pprint(response.json())
+
         except Exception as e:
             self.logger.error(
                 f"Could not export the rule {rule_file}",
