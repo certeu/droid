@@ -5,11 +5,11 @@ Module for Microsoft XDR
 import concurrent.futures
 import re
 
-from msgraph.core import GraphClient
-from msgraph.auth import ClientSecretCredential
-from msgraph.request import GraphRequest
+import asyncio
+import msal
+import requests
+import json
 from datetime import datetime, timedelta, timezone
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 
@@ -45,6 +45,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
+        else:
+            self._alert_prefix = None
 
     def mssp_run_xdr_search(
         self, client, rule_converted, start_time, current_time, customer_info
@@ -217,6 +219,26 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             )
             raise
 
+    def acquire_token(self):
+        # MSAL configuration
+        authority = f"https://login.microsoftonline.com/{self._tenant_id}"
+        scope = ["https://graph.microsoft.com/.default"]
+
+        # Create a confidential client application
+        app = msal.ConfidentialClientApplication(
+            self._client_id, authority=authority, client_credential=self._client_secret
+        )
+
+        # Acquire a token
+        result = app.acquire_token_for_client(scopes=scope)
+
+        if "access_token" in result:
+            token = result["access_token"]
+            return token
+        else:
+            self.logger.error("Failed to acquire token")
+            exit()
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """
         Create an Custom Detection Rule in Microsoft XDR
@@ -286,22 +308,26 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             },
         }
 
-        credential = ClientSecretCredential(
-            self._tenant_id, self._client_id, self._client_secret
-        )
-        client = GraphClient(credential, base_url="https://graph.microsoft.com/beta")
+        token = self.acquire_token()
 
         try:
-            # Create the request to add the custom detection rule
-            request = GraphRequest(
-                client=client,
-                method="POST",
-                endpoint="/security/rules/detectionRules",
-                json=alert_rule,
+            # Send the JSON payload to Microsoft Graph Security API
+            api_url = "https://graph.microsoft.com/beta/security/rules/detectionRules"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            response = requests.post(
+                api_url, headers=headers, data=json.dumps(alert_rule)
             )
 
-            # Send the request
-            response = request.send()
+            # Check the response
+            if response.status_code == 201:
+                print("Alert rule created successfully.")
+            else:
+                print(
+                    f"Failed to create alert rule: {response.status_code} - {response.text}"
+                )
         except Exception as e:
             self.logger.error(
                 f"Could not export the rule {rule_file}",
