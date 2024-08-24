@@ -44,6 +44,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._client_secret = self._parameters["client_secret"]
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token = self.acquire_token()
+        self._headers = {
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            }
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
@@ -52,6 +56,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
     def mssp_run_xdr_search(
         self, client, rule_converted, start_time, current_time, customer_info
     ):
+        # TODO: Find out if it's possible?
+        # Imho it would need an AppReg in every tennant, and a better credential management
+        return None
 
         customer = customer_info["customer"]
         workspace_id = customer_info["workspace_id"]
@@ -71,6 +78,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         return customer, result
 
     def run_xdr_search(self, rule_converted, rule_file, mssp_mode):
+        # TODO: Do it...
+        return None
 
         credential = self.get_credentials()
 
@@ -177,21 +186,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         Remove a Custom Detection Rule in Microsoft XDR
         """
         existing_rule = self.get_rule(rule_content['id'])
-        pprint(existing_rule)
         if existing_rule:
             try:
                 api_url =f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
-                headers = {
-                    "Authorization": f"Bearer {self._token}",
-                    "Content-Type": "application/json",
-                }
-                if headers:
-                    headers.update(headers)
+
                 response = requests.delete(
-                    api_url, headers=headers
+                    api_url, headers=self._headers
                 )
                 if "error" in response.json():
                     logger.error(f"Could not delete the rule {rule_file}. \nError: {response.json()['error']['message']}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": response.json()})
+                    raise
             except Exception as e:
                 self.logger.error(
                     f"Could not delete the rule {rule_file}",
@@ -281,6 +285,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             # Send the JSON payload to Microsoft Graph Security API
 
         except Exception as e:
+
             self.logger.error(
                 f"Could not export the rule {rule_file}",
                 extra={
@@ -291,6 +296,47 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 },
             )
             raise
+
+
+    def check_rule_changes(self, existing_rule, new_rule):
+        try:
+            change = False
+            global_fields = [
+                "displayName",
+                "isEnabled",
+            ]
+            alertTemplate_fields = [
+                "title",
+                "description",
+                "severity",
+                "category",
+                "recommendedActions",
+                "mitreTechniques",
+                "impactedAssets",
+            ]
+
+            for field in global_fields:
+                if existing_rule[field] != new_rule[field]:
+                    change = True
+            for field in alertTemplate_fields:
+                if existing_rule["detectionAction"]["alertTemplate"][field] != new_rule["detectionAction"]["alertTemplate"][field]:
+                    change = True
+            if existing_rule["queryCondition"]["queryText"] != new_rule["queryCondition"]["queryText"]:
+                change = True
+            if existing_rule["schedule"]["period"] != new_rule["schedule"]["period"]:
+                change = True
+        except Exception as e:
+            self.logger.error(f"Error while checking rule changes {e}")
+            return True
+        if change:
+            self.logger.info(f"Rule '{new_rule['displayName']}' has changed")
+            return True
+        else:
+            self.logger.info(f"Rule '{new_rule['displayName']}' already exists and is up to date")
+            return False
+
+
+
     def push_detection_rule(self, alert_rule=None, rule_content=None, rule_file=None, rule_converted=None):
         headers = {
                 "Authorization": f"Bearer {self._token}",
@@ -299,10 +345,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         existing_rule = self.get_rule(rule_content['id'])
         if existing_rule:
             self.logger.info("Rule already exists")
-            api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
-            response = requests.patch(
-                api_url, headers=headers, json=alert_rule
-            )
+            if not self.check_rule_changes(existing_rule, alert_rule):
+                return True
+            else:
+                api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
+                response = requests.patch(
+                    api_url, headers=headers, json=alert_rule
+                )
         else:
             api_url = self._api_base_url+"/security/rules/detectionRules"
             response = requests.post(
