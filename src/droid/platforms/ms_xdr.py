@@ -3,19 +3,11 @@ Module for Microsoft XDR
 """
 
 import concurrent.futures
-import azure.mgmt.resourcegraph as arg
 import re
 
-from azure.identity import DefaultAzureCredential
-from azure.identity import ClientSecretCredential
-from azure.mgmt.resource import SubscriptionClient
-from azure.mgmt.securityinsight import SecurityInsights
-from azure.mgmt.securityinsight.models import TriggerOperator
-from azure.mgmt.securityinsight.models import ScheduledAlertRule
-from azure.mgmt.securityinsight.models import EventGroupingSettings
-from azure.mgmt.securityinsight.models import IncidentConfiguration
-from azure.mgmt.securityinsight.models import GroupingConfiguration
-from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+from msgraph.core import GraphClient
+from msgraph.auth import ClientSecretCredential
+from msgraph.request import GraphRequest
 from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
@@ -35,150 +27,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._debug = debug
         self._json = json
 
-        if "threshold_operator" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "threshold_operator" parameter is required.'
-            )
-        if "threshold_value" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "threshold_value" parameter is required.'
-            )
-        if "suppress_status" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "suppress_status" parameter is required.'
-            )
-        if "incident_status" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "incident_status" parameter is required.'
-            )
-        if "grouping_reopen" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "grouping_reopen" parameter is required.'
-            )
-        if "grouping_status" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "grouping_status" parameter is required.'
-            )
-        if "grouping_period" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "grouping_period" parameter is required.'
-            )
-        if "grouping_method" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "grouping_method" parameter is required.'
-            )
-        if "suppress_period" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "suppress_period" parameter is required.'
-            )
-        if "query_frequency" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "query_frequency" parameter is required.'
-            )
         if "query_period" not in self._parameters:
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter is required.'
             )
-        if "subscription_id" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "subscription_id" parameter is required.'
-            )
-        if "resource_group" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "resource_group" parameter is required.'
-            )
-        if "workspace_id" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "workspace_id" parameter is required.'
-            )
-        if "workspace_name" not in self._parameters:
-            raise Exception(
-                'MicrosoftXDRPlatform: "workspace_name" parameter is required.'
-            )
-        if "days_ago" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "days_ago" parameter is required.')
-        if "timeout" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "timeout" parameter is required.')
 
         self.logger = ColorLogger("droid.platforms.msxdr.MicrosoftXDRPlatform")
 
         if self._json:
             self.logger.enable_json_logging()
 
-        self._workspace_id = self._parameters["workspace_id"]
-        self._workspace_name = self._parameters["workspace_name"]
-        self._subscription_id = self._parameters["subscription_id"]
-        self._resource_group = self._parameters["resource_group"]
-        self._days_ago = self._parameters["days_ago"]
-        self._threshold_operator = self._parameters["threshold_operator"]
-        self._threshold_value = self._parameters["threshold_value"]
-        self._query_frequency = self._parameters["query_frequency"]
         self._query_period = self._parameters["query_period"]
-        self._suppress_status = self._parameters["suppress_status"]
-        self._suppress_period = self._parameters["suppress_period"]
-        self._incident_status = self._parameters["incident_status"]
-        self._grouping_status = self._parameters["grouping_status"]
-        self._grouping_reopen = self._parameters["grouping_reopen"]
-        self._grouping_period = self._parameters["grouping_period"]
-        self._grouping_method = self._parameters["grouping_method"]
-        self._timeout = self._parameters["timeout"]
 
-        if "app" in (
-            self._parameters["search_auth"] or self._parameters["export_auth"]
-        ):
-            self._tenant_id = self._parameters["tenant_id"]
-            self._client_id = self._parameters["client_id"]
-            self._client_secret = self._parameters["client_secret"]
+        self._tenant_id = self._parameters["tenant_id"]
+        self._client_id = self._parameters["client_id"]
+        self._client_secret = self._parameters["client_secret"]
 
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
-
-    def get_credentials(self):
-        """Get credentials
-        Authenticate on Azure using a authentication method and return the credential object
-        """
-        if self._parameters["search_auth"] == "default":
-            if self._debug:
-                self.logger.debug("Default credential selected")
-            credential = DefaultAzureCredential()
-        else:
-            credential = ClientSecretCredential(
-                self._tenant_id, self._client_id, self._client_secret
-            )
-
-        return credential
-
-    def get_workspaces(self, credential):
-        graph_query = self._parameters["graph_query"]
-
-        subsClient = SubscriptionClient(credential)
-        subsRaw = []
-        for sub in subsClient.subscriptions.list():
-            subsRaw.append(sub.as_dict())
-        subsList = []
-        for sub in subsRaw:
-            subsList.append(sub.get("subscription_id"))
-
-        argClient = arg.ResourceGraphClient(credential)
-        argQueryOptions = arg.models.QueryRequestOptions(result_format="objectArray")
-
-        argQuery = arg.models.QueryRequest(
-            subscriptions=subsList, query=graph_query, options=argQueryOptions
-        )
-
-        results = argClient.resources(argQuery)
-
-        workspace_list = []
-
-        for entry in results.data:
-            name = entry.get("name")
-            workspace_id = entry.get("workspaceId")
-            workspace_name = name.split("(")[1].split(")")[0]
-            entry_dict = {"customer": workspace_name, "workspace_id": workspace_id}
-
-            workspace_list.append(entry_dict)
-
-        return workspace_list
 
     def mssp_run_xdr_search(
         self, client, rule_converted, start_time, current_time, customer_info
@@ -403,48 +269,39 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             "detectionAction": {
                 "alertTemplate": {
                     "title": display_name,
-                    "description": "Some alert description",
-                    "severity": "medium",
-                    "category": "Execution",
-                    "recommendedActions": null,
-                    "mitreTechniques": [],
-                    "impactedAssets": [
+                    "description": rule_content["description"],
+                    "severity": severity,
+                    "category": "Execution",  # TODO: Add the correct category
+                    "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
+                    "mitreTechniques": [],  # TODO: Check if f"tactics" works here
+                    "impactedAssets": [  # TODO: Decide what all to add here
                         {
                             "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
                             "identifier": "deviceId",
                         }
                     ],
                 },
-                "organizationalScope": null,
-                "responseActions": [
-                    {
-                        "@odata.type": "#microsoft.graph.security.isolateDeviceResponseAction",
-                        "identifier": "deviceId",
-                        "isolationType": "full",
-                    }
-                ],
+                "organizationalScope": None,  # TODO: Find out what this does
+                "responseActions": [],  # TODO: Find out what to add here
             },
         }
 
-        credential = self.get_credentials()
-
-        client = SecurityInsights(credential, self._subscription_id)
+        credential = ClientSecretCredential(
+            self._tenant_id, self._client_id, self._client_secret
+        )
+        client = GraphClient(credential, base_url="https://graph.microsoft.com/beta")
 
         try:
-            client.alert_rules.create_or_update(
-                resource_group_name=self._resource_group,
-                workspace_name=self._workspace_name,
-                rule_id=rule_content["id"],
-                alert_rule=alert_rule,
+            # Create the request to add the custom detection rule
+            request = GraphRequest(
+                client=client,
+                method="POST",
+                endpoint="/security/rules/detectionRules",
+                json=alert_rule,
             )
-            self.logger.info(
-                f"Successfully exported the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                },
-            )
+
+            # Send the request
+            response = request.send()
         except Exception as e:
             self.logger.error(
                 f"Could not export the rule {rule_file}",
