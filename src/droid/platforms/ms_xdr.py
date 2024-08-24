@@ -112,8 +112,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         existing_rule = self.get_rule(rule_content['id'])
         if existing_rule:
             try:
-                api_url =f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
-
+                api_url =f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
                 response = requests.delete(
                     api_url, headers=self._headers
                 )
