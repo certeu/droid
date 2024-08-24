@@ -76,17 +76,25 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 'MicrosoftXDRPlatform: "query_frequency" parameter is required.'
             )
         if "query_period" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "query_period" parameter is required.')
+            raise Exception(
+                'MicrosoftXDRPlatform: "query_period" parameter is required.'
+            )
         if "subscription_id" not in self._parameters:
             raise Exception(
                 'MicrosoftXDRPlatform: "subscription_id" parameter is required.'
             )
         if "resource_group" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "resource_group" parameter is required.')
+            raise Exception(
+                'MicrosoftXDRPlatform: "resource_group" parameter is required.'
+            )
         if "workspace_id" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "workspace_id" parameter is required.')
+            raise Exception(
+                'MicrosoftXDRPlatform: "workspace_id" parameter is required.'
+            )
         if "workspace_name" not in self._parameters:
-            raise Exception('MicrosoftXDRPlatform: "workspace_name" parameter is required.')
+            raise Exception(
+                'MicrosoftXDRPlatform: "workspace_name" parameter is required.'
+            )
         if "days_ago" not in self._parameters:
             raise Exception('MicrosoftXDRPlatform: "days_ago" parameter is required.')
         if "timeout" not in self._parameters:
@@ -344,13 +352,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise
 
     def create_rule(self, rule_content, rule_converted, rule_file):
-        """Create an analytic rule in Sentinel
-        Create a scheduled alert rule in Sentinel
+        """
+        Create an Custom Detection Rule in Microsoft XDR
         """
 
         # Handling the display name
         if self._alert_prefix:
-            display_name = self._alert_prefix + " " + rule_content["title"]
+            display_name = self._alert_prefix + " - " + rule_content["title"]
         else:
             display_name = rule_content["title"]
 
@@ -387,57 +395,36 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             tactics = None
 
-        if self._suppress_status == True:
-            suppression_enabled = True
-            suppression_duration = timedelta(hours=self._suppress_period)
-        else:
-            suppression_enabled = False
-            suppression_duration = None
-
-        if self._incident_status == True:
-            create_incident = True
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method,
-                )
-            else:
-                grouping_config = None
-        else:
-            create_incident = False
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method,
-                )
-            else:
-                grouping_config = None
-
-        alert_rule = ScheduledAlertRule(
-            # query='SecurityEvent | where EventID == "4688" and ((CommandLine contains " --adcs " and CommandLine contains " --port "))',
-            query=rule_converted,
-            description=rule_content["description"],
-            display_name=display_name,
-            severity=severity,
-            query_frequency=timedelta(hours=2),
-            query_period=timedelta(hours=2),
-            trigger_operator=TriggerOperator(self._threshold_operator),
-            trigger_threshold=self._threshold_value,
-            enabled=enabled,
-            suppression_duration=suppression_duration,
-            suppression_enabled=suppression_enabled,
-            event_grouping_settings=EventGroupingSettings(
-                aggregation_kind="SingleAlert"
-            ),
-            incident_configuration=IncidentConfiguration(
-                create_incident=create_incident, grouping_configuration=grouping_config
-            ),
-            tactics=tactics,
-        )
+        alert_rule = {
+            "displayName": display_name,
+            "isEnabled": enabled,
+            "queryCondition": {"queryText": "DeviceProcessEvents | take 1"},
+            "schedule": {"period": self._query_period},
+            "detectionAction": {
+                "alertTemplate": {
+                    "title": display_name,
+                    "description": "Some alert description",
+                    "severity": "medium",
+                    "category": "Execution",
+                    "recommendedActions": null,
+                    "mitreTechniques": [],
+                    "impactedAssets": [
+                        {
+                            "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
+                            "identifier": "deviceId",
+                        }
+                    ],
+                },
+                "organizationalScope": null,
+                "responseActions": [
+                    {
+                        "@odata.type": "#microsoft.graph.security.isolateDeviceResponseAction",
+                        "identifier": "deviceId",
+                        "isolationType": "full",
+                    }
+                ],
+            },
+        }
 
         credential = self.get_credentials()
 
