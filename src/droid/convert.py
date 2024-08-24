@@ -14,6 +14,7 @@ from droid.integrity import integrity_rule
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 from droid.color import ColorLogger
 
 class Conversion:
@@ -187,8 +188,10 @@ def convert_rules(parameters, droid_config, base_config):
             platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "esql", raw=False)
         elif 'eql' in platform_name:
             platform = ElasticPlatform(droid_config, parameters.debug, parameters.json, "eql", raw=False)
-        elif 'azure' or 'defender' in platform_name:
+        elif 'azure' in platform_name:
             platform = SentinelPlatform(droid_config, parameters.debug, parameters.json)
+        elif parameters.platform == 'microsoft365defender':
+            platform = MicrosoftXDRPlatform(droid_config, parameters.debug, parameters.json)
 
     if path.is_dir():
         error_i = False
