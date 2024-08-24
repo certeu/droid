@@ -271,7 +271,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
             else:
-                api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule["id"]}"
+                api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
                 response = requests.patch(
                     api_url, headers=headers, json=alert_rule
                 )
