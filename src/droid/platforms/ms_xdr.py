@@ -31,7 +31,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter is required.'
             )
-        elif self._parameters["query_period"].upper() not in ["0","1H", "3H", "12H","24H"]:
+        elif self._parameters["query_period"].upper() not in [
+            "0",
+            "1H",
+            "3H",
+            "12H",
+            "24H",
+        ]:
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter must be one of "0", "1H", "3H", "12H" or "24H".'
             )
@@ -229,18 +235,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "category": category,
                         "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                         "mitreTechniques": mitreTechniques,
-                        "impactedAssets": [
+                        "impactedAssets": [  # This is default, it can be overwritten by the custom rule fields
                             {
                                 "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
                                 "identifier": "deviceId",
-                            },
-                            {
-                                "@odata.type": "#microsoft.graph.security.impactedMailboxAsset",
-                                "identifier": "initiatingProcessAccountUpn",
-                            },
-                            {
-                                "@odata.type": "#microsoft.graph.security.impactedUserAsset",
-                                "identifier": "initiatingProcessAccountUpn",
                             },
                         ],
                     },
@@ -251,11 +249,19 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
-        if "custom" in rule_content and "actions" in rule_content["custom"]:
-            responseActions = self.parse_actions(
-                rule_content["custom"]["actions"], rule_file=rule_file
-            )
-            alert_rule["detectionAction"]["responseActions"] = responseActions
+        if "custom" in rule_content:
+            if "actions" in rule_content["custom"]:
+                responseActions = self.parse_actions(
+                    rule_content["custom"]["actions"], rule_file=rule_file
+                )
+                alert_rule["detectionAction"]["responseActions"] = responseActions
+            if "impactedAssets" in rule_content["custom"]:
+                impactedAssets = self.parse_impactedAssets(
+                    rule_content["custom"]["impactedAssets"], rule_file=rule_file
+                )
+                alert_rule["detectionAction"]["alertTemplate"][
+                    "impactedAssets"
+                ] = impactedAssets
         try:
             self.push_detection_rule(
                 alert_rule=alert_rule,
@@ -266,7 +272,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             # Send the JSON payload to Microsoft Graph Security API
 
         except Exception as e:
-
             self.logger.error(
                 f"Could not export the rule {rule_file}",
                 extra={
@@ -510,6 +515,45 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
             response_actions.append(response_action)
         return response_actions
+
+    def parse_impactedAssets(self, impactedAssets, rule_file=None):
+        impactedAssetsList = []
+        for asset in impactedAssets:
+            if "impactedAssetType" in asset and "identifier" in asset:
+                impactedAssetType = asset["impactedAssetType"].capitalize()
+                identifier = asset["identifier"]
+                # Define a mapping of action names to valid identifiers
+                valid_identifiers = {
+                    "Device": ["deviceId", "deviceName"],
+                    "Mailbox": ["accountUpn", "initiatingProcessAccountUpn"],
+                    "User": [
+                        "accountObjectId",
+                        "accountSid",
+                        "accountUpn",
+                        "initiatingProcessAccountObjectId",
+                        "initiatingProcessAccountSid",
+                        "initiatingProcessAccountUpn",
+                    ],
+                }
+                # Check if the action_name is in the valid_identifiers dictionary
+                if impactedAssetType in valid_identifiers:
+                    if identifier not in valid_identifiers[impactedAssetType]:
+                        self.logger.error(
+                            f"Identifier for {impactedAssetType} must be one of {valid_identifiers[impactedAssetType]} - {rule_file}"
+                        )
+                        raise
+                    else:
+                        impactedAsset = {
+                            "@odata.type": f"#microsoft.graph.security.impacted{impactedAssetType}Asset",
+                            "identifier": identifier,
+                        }
+                        impactedAssetsList.append(impactedAsset)
+                else:
+                    self.logger.error(
+                        f"Impacted Asset Type {impactedAssetType} is not valid - {rule_file}"
+                    )
+                    raise
+        return impactedAssetsList
 
     def _get(self, url=None, headers=None, params=None):
         # Send the JSON payload to Microsoft Graph Security API
