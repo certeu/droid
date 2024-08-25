@@ -182,7 +182,35 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             severity = "high"
         else:
             severity = rule_content["level"]
-        # TODO: Handling the tactic
+        mitreTechniques = []
+        category = None
+        if "tags" in rule_content:
+            for tag in rule_content["tags"]:
+                if tag.lower().startswith("attack."):
+                    t_value = re.match(r"attack\.([tT][0-9]{4}(\.[0-9]{3})?)", tag)
+                    if t_value:
+                        technique = t_value.group(1).upper()
+                        mitreTechniques.append(technique)
+                    c_value = tag.replace("attack.", "").lower().strip()
+                    if c_value in [
+                        "reconnaissance",
+                        "resource_development",
+                        "initial_access",
+                        "execution",
+                        "persistence",
+                        "privilege_escalation",
+                        "defense_evasion",
+                        "credential_access",
+                        "discovery",
+                        "lateral_movement",
+                        "collection",
+                        "command_and_control",
+                        "exfiltration",
+                        "impact",
+                    ]:
+                        category = c_value.replace("_", " ").title().replace(" ", "")
+        if not category:
+            category = "Execution"  # Fallback... this should never happen
         try:
             alert_rule = {
                 "displayName": display_name,
@@ -194,9 +222,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "title": display_name,
                         "description": rule_content["description"],
                         "severity": severity,
-                        "category": "Execution",  # TODO: Add the correct category
+                        "category": category,
                         "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                        "mitreTechniques": [],  # TODO: Check if f"tactics" works here
+                        "mitreTechniques": mitreTechniques,
                         "impactedAssets": [
                             {
                                 "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
