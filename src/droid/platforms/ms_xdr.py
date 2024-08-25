@@ -367,10 +367,27 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         for action in actions:
             response_action = {}
             if "action" in action:
-                response_action["@odata.type"] = (
-                    f"#microsoft.graph.security.{action['action']}ResponseAction"
-                )
                 action_name = action["action"]
+                if not action_name in [
+                    "forceUserPasswordReset",
+                    "disableUser",
+                    "markUserAsCompromised",
+                    "stopAndQuarantineFile",
+                    "restrictAppExecution",
+                    "initiateInvestigation",
+                    "runAntivirusScan",
+                    "collectInvestigationPackage",
+                    "isolateDevice",
+                    "blockFile",
+                    "allowFile",
+                ]:
+                    self.logger.warning(
+                        f"Only these actiontypes are allowed: forceUserPasswordReset, disableUser, markUserAsCompromised, stopAndQuarantineFile, restrictAppExecution, initiateInvestigation, runAntivirusScan, collectInvestigationPackage, isolateDevice, blockFile, allowFile. {rule_file}"
+                    )
+                    continue
+                response_action["@odata.type"] = (
+                    f"#microsoft.graph.security.{action_name}ResponseAction"
+                )
                 # Isolate Device needs the field isolationType
                 if action_name == "isolateDeviceResponseAction":
                     if "isolationType" in action:
