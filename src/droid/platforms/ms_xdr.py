@@ -31,6 +31,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter is required.'
             )
+        elif self._parameters["query_period"].upper() not in ["0","1H", "3H", "12H","24H"]:
+            raise Exception(
+                'MicrosoftXDRPlatform: "query_period" parameter must be one of "0", "1H", "3H", "12H" or "24H".'
+            )
 
         self.logger = ColorLogger("droid.platforms.msxdr.MicrosoftXDRPlatform")
 
