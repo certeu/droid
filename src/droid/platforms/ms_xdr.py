@@ -250,6 +250,20 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.error(e)
 
         if "custom" in rule_content:
+            if "query_period" in rule_content["custom"]:
+                query_period = rule_content["custom"]["query_period"].upper()
+                if query_period in [
+                    "0",
+                    "1H",
+                    "3H",
+                    "12H",
+                    "24H",
+                ]:
+                    alert_rule["schedule"]["period"] = query_period
+                else:
+                    self.logger.error(
+                        f"Sigma Query Period must be one of '0', '1H', '3H', '12H' or '24H', used value provided in the config {self._query_period} - {rule_file}"
+                    )
             if "actions" in rule_content["custom"]:
                 responseActions = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file
@@ -533,6 +547,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "initiatingProcessAccountObjectId",
                         "initiatingProcessAccountSid",
                         "initiatingProcessAccountUpn",
+                        "targetAccountUpn",
                     ],
                 }
                 # Check if the action_name is in the valid_identifiers dictionary
