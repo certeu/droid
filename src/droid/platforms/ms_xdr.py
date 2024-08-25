@@ -45,9 +45,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token = self.acquire_token()
         self._headers = {
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "application/json",
-            }
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
@@ -82,7 +82,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         try:
             results = self._post(url="/security/runHuntingQuery", payload=payload)
             if "error" in results:
-                self.logger.error(f"Error while running the query {results['error']['message']}")
+                self.logger.error(
+                    f"Error while running the query {results['error']['message']}"
+                )
                 return 0
             else:
                 return len(results["results"])
@@ -109,15 +111,21 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         """
         Remove a Custom Detection Rule in Microsoft XDR
         """
-        existing_rule = self.get_rule(rule_content['id'])
+        existing_rule = self.get_rule(rule_content["id"])
         if existing_rule:
             try:
-                api_url =f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
-                response = requests.delete(
-                    api_url, headers=self._headers
-                )
+                api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
+                response = requests.delete(api_url, headers=self._headers)
                 if "error" in response.json():
-                    logger.error(f"Could not delete the rule {rule_file}. \nError: {response.json()['error']['message']}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": response.json()})
+                    logger.error(
+                        f"Could not delete the rule {rule_file}. \nError: {response.json()['error']['message']}",
+                        extra={
+                            "rule_file": rule_file,
+                            "rule_converted": rule_converted,
+                            "rule_content": rule_content,
+                            "error": response.json(),
+                        },
+                    )
                     raise
             except Exception as e:
                 self.logger.error(
@@ -189,12 +197,20 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "category": "Execution",  # TODO: Add the correct category
                         "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                         "mitreTechniques": [],  # TODO: Check if f"tactics" works here
-                        "impactedAssets": [{'@odata.type': '#microsoft.graph.security.impactedDeviceAsset',
-                                                                        'identifier': 'deviceId'},
-                                                                        {'@odata.type': '#microsoft.graph.security.impactedMailboxAsset',
-                                                                        'identifier': 'initiatingProcessAccountUpn'},
-                                                                        {'@odata.type': '#microsoft.graph.security.impactedUserAsset',
-                                                                        'identifier': 'initiatingProcessAccountUpn'}],
+                        "impactedAssets": [
+                            {
+                                "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
+                                "identifier": "deviceId",
+                            },
+                            {
+                                "@odata.type": "#microsoft.graph.security.impactedMailboxAsset",
+                                "identifier": "initiatingProcessAccountUpn",
+                            },
+                            {
+                                "@odata.type": "#microsoft.graph.security.impactedUserAsset",
+                                "identifier": "initiatingProcessAccountUpn",
+                            },
+                        ],
                     },
                     "organizationalScope": None,  # TODO: Find out what this does
                     "responseActions": [],  # TODO: Define Actions in custom rule fields
@@ -203,8 +219,18 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
+        if "custom" in rule_content and "actions" in rule_content["custom"]:
+            responseActions = self.parse_actions(
+                rule_content["custom"]["actions"], rule_file=rule_file
+            )
+            alert_rule["detectionAction"]["responseActions"] = responseActions
         try:
-            self.push_detection_rule(alert_rule=alert_rule, rule_content=rule_content, rule_file=rule_file, rule_converted=rule_converted)
+            self.push_detection_rule(
+                alert_rule=alert_rule,
+                rule_content=rule_content,
+                rule_file=rule_file,
+                rule_converted=rule_converted,
+            )
             # Send the JSON payload to Microsoft Graph Security API
 
         except Exception as e:
@@ -219,7 +245,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 },
             )
             raise
-
 
     def check_rule_changes(self, existing_rule, new_rule):
         try:
@@ -242,11 +267,22 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 if existing_rule[field] != new_rule[field]:
                     change = True
             for field in alertTemplate_fields:
-                if existing_rule["detectionAction"]["alertTemplate"][field] != new_rule["detectionAction"]["alertTemplate"][field]:
+                if (
+                    existing_rule["detectionAction"]["alertTemplate"][field]
+                    != new_rule["detectionAction"]["alertTemplate"][field]
+                ):
                     change = True
-            if existing_rule["queryCondition"]["queryText"] != new_rule["queryCondition"]["queryText"]:
+            if (
+                existing_rule["queryCondition"]["queryText"]
+                != new_rule["queryCondition"]["queryText"]
+            ):
                 change = True
             if existing_rule["schedule"]["period"] != new_rule["schedule"]["period"]:
+                change = True
+            if (
+                existing_rule["detectionAction"]["responseActions"]
+                != new_rule["detectionAction"]["responseActions"]
+            ):
                 change = True
         except Exception as e:
             self.logger.error(f"Error while checking rule changes {e}")
@@ -255,31 +291,29 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.info(f"Rule '{new_rule['displayName']}' has changed")
             return True
         else:
-            self.logger.info(f"Rule '{new_rule['displayName']}' already exists and is up to date")
+            self.logger.info(
+                f"Rule '{new_rule['displayName']}' already exists and is up to date"
+            )
             return False
 
-
-
-    def push_detection_rule(self, alert_rule=None, rule_content=None, rule_file=None, rule_converted=None):
+    def push_detection_rule(
+        self, alert_rule=None, rule_content=None, rule_file=None, rule_converted=None
+    ):
         headers = {
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "application/json",
-            }
-        existing_rule = self.get_rule(rule_content['id'])
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        existing_rule = self.get_rule(rule_content["id"])
         if existing_rule:
             self.logger.info("Rule already exists")
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
             else:
                 api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
-                response = requests.patch(
-                    api_url, headers=headers, json=alert_rule
-                )
+                response = requests.patch(api_url, headers=headers, json=alert_rule)
         else:
-            api_url = self._api_base_url+"/security/rules/detectionRules"
-            response = requests.post(
-                api_url, headers=headers, json=alert_rule
-            )
+            api_url = self._api_base_url + "/security/rules/detectionRules"
+            response = requests.post(api_url, headers=headers, json=alert_rule)
 
         if response.status_code == 400:
             self.logger.error(
@@ -326,9 +360,111 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             print(response.status_code)
             pprint(response.json())
 
+    def parse_actions(self, actions, rule_file=None):
+        # This whole function is a mess
+        # It might be better to have a schema validation for the actions
+        response_actions = []
+        for action in actions:
+            response_action = {}
+            if "action" in action:
+                response_action["@odata.type"] = (
+                    f"#microsoft.graph.security.{action['action']}ResponseAction"
+                )
+                action_name = action["action"]
+                # Isolate Device needs the field isolationType
+                if action_name == "isolateDeviceResponseAction":
+                    if "isolationType" in action:
+                        response_action["isolationType"] = action["isolationType"]
+                    else:
+                        self.logger.error(
+                            f"Isolation Type ('selective' or 'full') is missing from the rule {rule_file}"
+                        )
+                        raise
+                # Block File needs the field deviceGroupNames but it can easily be an empty list
+                if action_name == "blockFileResponseAction":
+                    if "deviceGroupNames" in action:
+                        if isinstance(action["deviceGroupNames"], str):
+                            response_action["deviceGroupNames"] = [
+                                action["deviceGroupNames"]
+                            ]
+                        elif isinstance(action["deviceGroupNames"], list):
+                            response_action["deviceGroupNames"] = action[
+                                "deviceGroupNames"
+                            ]
+                        elif action["deviceGroupNames"] is None:
+                            response_action["deviceGroupNames"] = []
+                        else:
+                            response_action["deviceGroupNames"] = []
+                # These actions all have an identifier invisible in the GUI.
+                # So we add it automatically, it's still possible to overwrite though
+                if action_name in [
+                    "restrictAppExecution",
+                    "initiateInvestigation",
+                    "runAntivirusScan",
+                    "collectInvestigationPackage",
+                    "isolateDevice",
+                ]:
+                    response_action["identifier"] = "deviceId"
+            else:
+                self.logger.error(f"Action Name is missing from the rule {rule_file}")
+                raise
+            if "identifier" in action:
+                if isinstance(action["identifier"], list):
+                    identifier = ",".join(action["identifier"])
+                else:
+                    identifier = action["identifier"]
+                # Define a mapping of action names to valid identifiers
+                valid_identifiers = {
+                    "forceUserPasswordReset": [
+                        "accountSid",
+                        "initiatingProcessAccountSid",
+                    ],
+                    "initiatingProcessAccountSid": [
+                        "accountSid",
+                        "initiatingProcessAccountSid",
+                    ],
+                    "markUserAsCompromised": [
+                        "accountObjectId",
+                        "initiatingProcessAccountObjectId",
+                    ],
+                    "stopAndQuarantineFile": ["sha1", "initiatingProcessSHA1"],
+                    "blockFile": [
+                        "sha256",
+                        "sha1",
+                        "initiatingProcessSHA1",
+                        "initiatingProcessSHA256",
+                    ],
+                    "allowFile": [
+                        "sha256",
+                        "sha1",
+                        "initiatingProcessSHA1",
+                        "initiatingProcessSHA256",
+                    ],
+                }
+                # Check if the action_name is in the valid_identifiers dictionary
+                if action_name in valid_identifiers:
+                    if identifier not in valid_identifiers[action_name]:
+                        self.logger.error(
+                            f"Identifier for {action_name} must be one of {valid_identifiers[action_name]} - {rule_file}"
+                        )
+                        raise
+                # And of course there is an exeption
+                # stopAndQuarantineFile needs deviceId as always, but in a comma separated list... MS Graph API is weird
+                if action_name == "stopAndQuarantineFile":
+                    identifier += ",deviceId"
+                response_action["identifier"] = identifier
+            if not "identifier" in response_action:
+                self.logger.error(
+                    f"Action Identifier is missing from the rule {rule_file}"
+                )
+                raise
+
+            response_actions.append(response_action)
+        return response_actions
+
     def _get(self, url=None, headers=None, params=None):
         # Send the JSON payload to Microsoft Graph Security API
-        
+
         api_url = self._api_base_url + url
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -336,13 +472,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         }
         if headers:
             headers.update(headers)
-        response = requests.get(
-            api_url, headers=headers, params=params
-        )
+        response = requests.get(api_url, headers=headers, params=params)
         return response.json()
+
     def _post(self, url=None, payload=None, headers=None, params=None):
         # Send the JSON payload to Microsoft Graph Security API
-        
+
         api_url = self._api_base_url + url
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -350,7 +485,5 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         }
         if headers:
             headers.update(headers)
-        response = requests.post(
-            api_url, headers=self._headers, json=payload
-        )
+        response = requests.post(api_url, headers=self._headers, json=payload)
         return response.json()
