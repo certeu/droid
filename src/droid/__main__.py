@@ -175,8 +175,7 @@ def droid_platform_config(args, config_path):
         except Exception:
             raise Exception("Something unexpected happened...")
 
-        if args.export or args.search:
-
+        if args.export or args.search or args.integrity:
             if  (
                     args.platform == 'microsoft365defender' and
                     config["search_auth"] != "app" and

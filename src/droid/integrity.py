@@ -7,6 +7,7 @@ from pathlib import Path
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 from droid.color import ColorLogger
 from droid.export import post_rule_content
 
@@ -142,6 +143,44 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
         return error
 
 
+def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error):
+
+    try:
+        saved_search: dict = platform.get_rule(rule_content["id"])
+    except Exception as e:
+        logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
+        return error
+
+    if saved_search:
+        logger.info(f"Successfully retrieved the rule {rule_file}")
+    else:
+        logger.error(f"Rule not found {rule_file}")
+        error = True
+        return error
+
+    if rule_converted != saved_search["queryCondition"]["queryText"]:
+        logger.error(f"Query in rule_content does not match query in result")
+        error = True
+
+
+    # Check if disabled
+    is_disabled = rule_content.get('custom', {}).get('disabled')
+
+    if is_disabled and not saved_search["isEnabled"]:
+        logger.info("The rule is disabled as expected")
+    elif is_disabled and saved_search["isEnabled"]:
+        logger.error("The rule is not disabled on the platform")
+        error = True
+    elif is_disabled is None and not saved_search["isEnabled"]:
+        logger.error("The rule is not enabled on the platform")
+        error = True
+    elif is_disabled is None and saved_search["isEnabled"]:
+        logger.info("The rule is enabled as expected")
+
+    if error:
+        return error
+
+
 def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
     try:
         saved_search: dict = platform.get_rule(rule_content["id"])
@@ -223,10 +262,10 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     elif parameters.platform in ["esql", "eql"]:
         error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif 'azure' in parameters.platform:
-        error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
-        return error
     elif parameters.platform == 'microsoft365defender': # TODO: Add Integrity check for Microsoft 365 Defender
+        error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
+        return error
+    elif 'azure' in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
 
