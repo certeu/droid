@@ -69,11 +69,11 @@ def search_rule_ms_xdr(rule_converted, platform: MicrosoftXDRPlatform, rule_file
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f'(Microsoft XDR) Match found for {rule_file}')
+            logger.warning(f'{result} Matches found for {rule_file}')
             search_warning = True
             return error, search_warning
         else:
-            logger.info(f"(Microsoft XDR) No hits for {rule_file}")
+            logger.info(f"No hits for {rule_file}")
             return error, search_warning
 
     except Exception as e:
