@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-
+import yaml
 
 logger = ColorLogger("droid.platforms.msxdr")
 
@@ -43,6 +43,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter must be one of "0", "1H", "3H", "12H" or "24H".'
             )
+        
+        if "authentication_file" in self._parameters:
+            try:
+                with open(self._parameters["authentication_file"], "r") as f:
+                    self._credentials_dict = yaml.safe_load(f)
+            except Exception as e:
+                self.logger.error(f"Could not load the authentication yaml {e}")
+                raise
+        else:
+            self.logger.error("No authentication file provided")
+            raise
 
         self.logger = ColorLogger("droid.platforms.msxdr.MicrosoftXDRPlatform")
 
@@ -50,16 +61,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.enable_json_logging()
 
         self._query_period = self._parameters["query_period"]
-
-        self._tenant_id = self._parameters["tenant_id"]
-        self._client_id = self._parameters["client_id"]
-        self._client_secret = self._parameters["client_secret"]
+        #self._tenant_id = self._parameters["tenant_id"]
+        #self._client_id = self._parameters["client_id"]
+        #self._client_secret = self._parameters["client_secret"]
+        
         self._api_base_url = "https://graph.microsoft.com/beta"
-        self._token = self.acquire_token()
-        self._headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json",
-        }
+        #self._token = self.acquire_token(client_id=self._client_id, client_secret=self._client_secret)
+        #self._headers = {
+        #    "Authorization": f"Bearer {self._token}",
+        #    "Content-Type": "application/json",
+        #}
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
@@ -90,21 +101,32 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         return customer, result
 
     def run_xdr_search(self, rule_converted, rule_file):
-        payload = {"Query": rule_converted, "Timespan": "P1D"}
-        try:
-            results, status_code = self._post(
-                url="/security/runHuntingQuery", payload=payload
+        returnvalues = {}
+        for credentials in self._credentials_dict:
+            tenant_name = credentials["name"]
+            self.logger.info(f"Pushing Rules for Tenant {tenant_name}")
+            self._token = self.acquire_token(
+                tenant_id=credentials["tenant_id"],
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
             )
-            if "error" in results:
-                self.logger.error(
-                    f"Error while running the query {results['error']['message']}"
+
+            payload = {"Query": rule_converted, "Timespan": "P1D"}
+            try:
+                results, status_code = self._post(
+                    url="/security/runHuntingQuery", payload=payload
                 )
-                return 0
-            else:
-                return len(results["results"])
-        except Exception as e:
-            self.logger.error(f"Error while running the query {e}")
-            return 0
+                if "error" in results:
+                    self.logger.error(
+                        f"Error while running the query {results['error']['message']}"
+                    )
+                    returnvalues[tenant_name] = 0
+                else:
+                    returnvalues[tenant_name] = len(results["results"])
+            except Exception as e:
+                self.logger.error(f"Error while running the query {e}")
+                returnvalues[tenant_name] = 0
+        return returnvalues
 
     def get_rule(self, rule_id):
         """Retrieve a scheduled alert rule in Sentinel
@@ -155,25 +177,29 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 raise
 
-    def acquire_token(self):
-        # MSAL configuration
-        authority = f"https://login.microsoftonline.com/{self._tenant_id}"
-        scope = ["https://graph.microsoft.com/.default"]
+    def acquire_token(self, tenant_id=None, client_id=None, client_secret=None):
+        if tenant_id and client_id and client_secret:
+            # MSAL configuration
+            authority = f"https://login.microsoftonline.com/{tenant_id}"
+            scope = ["https://graph.microsoft.com/.default"]
 
-        # Create a confidential client application
-        app = msal.ConfidentialClientApplication(
-            self._client_id, authority=authority, client_credential=self._client_secret
-        )
+            # Create a confidential client application
+            app = msal.ConfidentialClientApplication(
+                client_id, authority=authority, client_credential=client_secret
+            )
 
-        # Acquire a token
-        result = app.acquire_token_for_client(scopes=scope)
+            # Acquire a token
+            result = app.acquire_token_for_client(scopes=scope)
 
-        if "access_token" in result:
-            token = result["access_token"]
-            return token
+            if "access_token" in result:
+                token = result["access_token"]
+                return token
+            else:
+                self.logger.error("Failed to acquire token")
+                exit()
         else:
-            self.logger.error("Failed to acquire token")
-            exit()
+            self.logger.error("Tenant ID, Client ID and Client Secret are required")
+            raise
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """
@@ -282,26 +308,35 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 alert_rule["detectionAction"]["alertTemplate"][
                     "impactedAssets"
                 ] = impactedAssets
-        try:
-            self.push_detection_rule(
-                alert_rule=alert_rule,
-                rule_content=rule_content,
-                rule_file=rule_file,
-                rule_converted=rule_converted,
-            )
-            # Send the JSON payload to Microsoft Graph Security API
+        
 
-        except Exception as e:
-            self.logger.error(
-                f"Could not export the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": e,
-                },
+        for credentials in self._credentials_dict:
+            self.logger.info(f"Pushing Rules for Tenant {credentials['name']}")
+            self._token = self.acquire_token(
+                tenant_id=credentials["tenant_id"],
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
             )
-            raise
+            try:
+                self.push_detection_rule(
+                    alert_rule=alert_rule,
+                    rule_content=rule_content,
+                    rule_file=rule_file,
+                    rule_converted=rule_converted,
+                )
+                # Send the JSON payload to Microsoft Graph Security API
+
+            except Exception as e:
+                self.logger.error(
+                    f"Could not export the rule {rule_file}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                        "error": e,
+                    },
+                )
+                raise
 
     def check_rule_changes(self, existing_rule, new_rule):
         try:
