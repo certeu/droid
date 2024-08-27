@@ -39,7 +39,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft365defender', 'esql', 'eql'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql', 'eql'])
     parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
     parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
@@ -91,11 +91,11 @@ def is_raw_rule(args, base_config):
         return True
     elif args.platform in ['esql', 'eql']:
         return False
-    elif args.platform == 'microsoft365defender' and raw_rule_folder_name in args.rules:
+    elif args.platform == 'microsoft_defender' and raw_rule_folder_name in args.rules:
         return True
     elif (
         args.platform in ['splunk', 'azure'] or
-        (args.platform == 'microsoft365defender')
+        (args.platform == 'microsoft_defender')
     ):
         return False
 
@@ -156,15 +156,15 @@ def droid_platform_config(args, config_path):
 
         return config_splunk
 
-    if args.platform == 'azure' or args.platform == 'microsoft365defender':
+    if args.platform == 'azure' or args.platform == 'microsoft_defender':
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()
                 config_data = tomllib.loads(content)
-                if args.platform == 'microsoft365defender' and args.sentinel_mde:
+                if args.platform == 'microsoft_defender' and args.sentinel_mde:
                     # With Azure Sentinel as backend, loads config from azure but keep MDE pipelines
                     config = config_data["platforms"]["azure"]
-                    config["pipelines"] = config_data["platforms"]["microsoft365defender"]["pipelines"]
+                    config["pipelines"] = config_data["platforms"]["microsoft_defender"]["pipelines"]
                 else:
                     config = config_data["platforms"][args.platform]
                 # Replace workspace id and workspace name if env available
@@ -177,7 +177,7 @@ def droid_platform_config(args, config_path):
 
         if args.export or args.search or args.integrity:
             if  (
-                    args.platform == 'microsoft365defender' and
+                    args.platform == 'microsoft_defender' and
                     config["search_auth"] != "app" and
                     config["export_auth"] != "app" and not
                     args.sentinel_mde
@@ -373,14 +373,14 @@ def main(argv=None) -> None:
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
-        elif args.platform == 'microsoft365defender' and args.sentinel_mde:
+        elif args.platform == 'microsoft_defender' and args.sentinel_mde:
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft Defender for Endpoint raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
-        elif args.platform == "microsoft365defender":
+        elif args.platform == "microsoft_defender":
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft XDR raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))

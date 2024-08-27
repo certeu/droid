@@ -22,7 +22,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
 
-        super().__init__(name="Sentinel")
+        super().__init__(name="Microsoft XDR")
 
         self._parameters = parameters
 
@@ -68,8 +68,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
     def mssp_run_xdr_search(
         self, client, rule_converted, start_time, current_time, customer_info
     ):
-        # TODO: Find out if it's possible?
-        # Imho it would need an AppReg in every tennant, and a better credential management
+        # TODO: Provide a list of tenant ids and process
         return None
 
         customer = customer_info["customer"]
@@ -99,16 +98,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.error(
                     f"Error while running the query {results['error']['message']}"
                 )
-                return 0
+                raise
             else:
                 return len(results["results"])
         except Exception as e:
             self.logger.error(f"Error while running the query {e}")
-            return 0
+            raise
 
     def get_rule(self, rule_id):
-        """Retrieve a scheduled alert rule in Sentinel
-        Remove a scheduled alert rule in Sentinel
+        """Retrieve a scheduled alert rule in Microsoft XDR
+        Remove a scheduled alert rule in Microsoft XDR
         """
         try:
             params = {"$filter": f"contains(displayName, '{rule_id}')"}
@@ -129,30 +128,25 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         """
         existing_rule = self.get_rule(rule_content["id"])
         if existing_rule:
-            try:
-                api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
-                response = requests.delete(api_url, headers=self._headers)
-                if "error" in response.json():
-                    logger.error(
-                        f"Could not delete the rule {rule_file}. \nError: {response.json()['error']['message']}",
-                        extra={
-                            "rule_file": rule_file,
-                            "rule_converted": rule_converted,
-                            "rule_content": rule_content,
-                            "error": response.json(),
-                        },
-                    )
-                    raise
-            except Exception as e:
-                self.logger.error(
-                    f"Could not delete the rule {rule_file}",
+
+            api_url = f'{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}'
+            response = requests.delete(api_url, headers=self._headers)
+
+            if response.status_code == 204:
+                self.logger.info(
+                    f"Rule {rule_file} was successfully deleted",
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
-                        "rule_content": rule_content,
-                        "error": e,
-                    },
-                )
+                        "rule_content": rule_content})
+            else:
+                self.logger.error(
+                    f"Could not deleted {rule_file} - error: {response.json()['error']['message']}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content
+                    })
                 raise
 
     def acquire_token(self):
@@ -172,7 +166,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             token = result["access_token"]
             return token
         else:
-            self.logger.error("Failed to acquire token")
+            self.logger.error(f"Failed to acquire token: {result["error_description"]}")
             exit()
 
     def create_rule(self, rule_content, rule_converted, rule_file):
@@ -184,6 +178,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         display_name = rule_content["title"] + " - " + rule_content["id"]
         if self._alert_prefix:
             display_name = self._alert_prefix + " - " + display_name
+
+        # Handling the alert title
+
+        alert_title = rule_content["title"]
+        if self._alert_prefix:
+            alert_title = self._alert_prefix + " - " + alert_title
 
         # Handling the status of the alert
 
@@ -235,7 +235,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 "schedule": {"period": self._query_period.upper()},
                 "detectionAction": {
                     "alertTemplate": {
-                        "title": display_name,
+                        "title": alert_title,
                         "description": rule_content["description"],
                         "severity": severity,
                         "category": category,
@@ -584,7 +584,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         while True:
             response = requests.get(api_url, headers=headers, params=params)
             if response.status_code == 429:
-                logger.debug("Rate limit reached, waiting 60 seconds")
+                self.logger.debug("Rate limit reached, waiting 60 seconds")
                 time.sleep(60)
             else:
                 break
@@ -603,7 +603,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         while True:
             response = requests.post(api_url, headers=headers, json=payload)
             if response.status_code == 429:
-                logger.debug("Rate limit reached, waiting 60 seconds")
+                self.logger.debug("Rate limit reached, waiting 60 seconds")
                 time.sleep(60)
             else:
                 break
