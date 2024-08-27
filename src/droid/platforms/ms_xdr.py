@@ -2,15 +2,11 @@
 Module for Microsoft XDR
 """
 
-import concurrent.futures
 import re
 from pprint import pprint
-import asyncio
 import msal
 import requests
-import json
 import time
-from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 
@@ -127,6 +123,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         Remove a Custom Detection Rule in Microsoft XDR
         """
         existing_rule = self.get_rule(rule_content["id"])
+
         if existing_rule:
 
             api_url = f"{self._api_base_url}/security/rules/detectionRules/{existing_rule['id']}"
@@ -148,6 +145,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "rule_content": rule_content
                     })
                 raise
+        else:
+            self.logger.info(
+                f"Rule {rule_file} was already removed",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content})
 
     def acquire_token(self):
         # MSAL configuration

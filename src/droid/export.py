@@ -48,15 +48,15 @@ def export_rule(
 
     if parameters.json:
         logger.enable_json_logging()
-   #try:
+    try:
         if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
             platform.remove_rule(rule_content, rule_converted, rule_file)
         else:
             platform.create_rule(rule_content, rule_converted, rule_file)
-    #except Exception as e:
-        #logger.error(f"Could not export the rule {rule_file}: {e}")
-        #error = True
-        #return error
+    except Exception as e:
+        logger.error(f"Could not export the rule {rule_file}: {e}")
+        error = True
+        return error
 
     logger.info(f"Successfully exported the rule {rule_file}")
     return error
