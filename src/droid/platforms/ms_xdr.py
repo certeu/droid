@@ -166,7 +166,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             token = result["access_token"]
             return token
         else:
-            self.logger.error(f"Failed to acquire token: {result["error_description"]}")
+            self.logger.error(f'Failed to acquire token: {result["error_description"]}')
             exit()
 
     def create_rule(self, rule_content, rule_converted, rule_file):
