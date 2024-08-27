@@ -3,13 +3,14 @@ Module for Microsoft XDR
 """
 
 import re
-from pprint import pprint
-import msal
 import requests
 import time
+
+from pprint import pprint
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-
+from msal import ConfidentialClientApplication
+from azure.identity import DefaultAzureCredential
 
 logger = ColorLogger("droid.platforms.msxdr")
 
@@ -47,9 +48,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         self._query_period = self._parameters["query_period"]
 
-        self._tenant_id = self._parameters["tenant_id"]
-        self._client_id = self._parameters["client_id"]
-        self._client_secret = self._parameters["client_secret"]
+        if 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
+            self._tenant_id = self._parameters["tenant_id"]
+            self._client_id = self._parameters["client_id"]
+            self._client_secret = self._parameters["client_secret"]
+        else:
+            # Default auth
+            self._tenant_id = self._parameters["tenant_id"]
+
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token = self.acquire_token()
         self._headers = {
@@ -158,20 +164,30 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         authority = f"https://login.microsoftonline.com/{self._tenant_id}"
         scope = ["https://graph.microsoft.com/.default"]
 
-        # Create a confidential client application
-        app = msal.ConfidentialClientApplication(
-            self._client_id, authority=authority, client_credential=self._client_secret
-        )
+        if self._parameters["search_auth"] == "default":
+            if self._debug:
+                self.logger.debug("Default credential selected")
 
-        # Acquire a token
-        result = app.acquire_token_for_client(scopes=scope)
+            # Use DefaultAzureCredential to acquire a token
+            credential = DefaultAzureCredential()
+            token = credential.get_token(*scope).token
 
-        if "access_token" in result:
-            token = result["access_token"]
             return token
         else:
-            self.logger.error(f'Failed to acquire token: {result["error_description"]}')
-            exit()
+            # Create a confidential client application
+            app = ConfidentialClientApplication(
+                self._client_id, authority=authority, client_credential=self._client_secret
+            )
+
+            # Acquire a token
+            result = app.acquire_token_for_client(scopes=scope)
+
+            if "access_token" in result:
+                token = result["access_token"]
+                return token
+            else:
+                self.logger.error(f'Failed to acquire token: {result["error_description"]}')
+                exit()
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """

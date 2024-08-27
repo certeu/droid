@@ -176,13 +176,6 @@ def droid_platform_config(args, config_path):
             raise Exception("Something unexpected happened...")
 
         if args.export or args.search or args.integrity:
-            if  (
-                    args.platform == 'microsoft_defender' and
-                    config["search_auth"] != "app" and
-                    config["export_auth"] != "app" and not
-                    args.sentinel_mde
-                ):
-                    exit("Error: DROID only supports Azure App Registration authentication method for MDE.")
 
             if config["search_auth"] == "app":
 
