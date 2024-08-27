@@ -279,8 +279,8 @@ def integrity_rule_raw(parameters: dict, export_config: dict, raw_rule=False):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+    elif parameters.platform == 'microsoft_defender':
+        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():
         error_i = False
