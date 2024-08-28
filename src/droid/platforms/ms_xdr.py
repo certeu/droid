@@ -434,8 +434,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             pprint(response)
 
     def parse_actions(self, actions, rule_file=None):
-        # This whole function is a mess
-        # It might be better to have a schema validation for the actions
+        # TODO: It might be better to have a schema validation for the actions
         response_actions = []
         for action in actions:
             response_action = {}
@@ -539,7 +538,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         )
                         raise
                 # And of course there is an exeption
-                # stopAndQuarantineFile needs deviceId as always, but in a comma separated list... MS Graph API is weird
+                # stopAndQuarantineFile needs deviceId as always, but in a comma separated list
                 if action_name == "stopAndQuarantineFile":
                     identifier += ",deviceId"
                 response_action["identifier"] = identifier
