@@ -158,9 +158,28 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         error = True
         return error
 
-    if rule_converted != saved_search["queryCondition"]["queryText"]:
-        logger.error(f"Query in rule_content does not match query in result")
-        error = True
+    result = {
+        "description": saved_search['detectionAction']['alertTemplate']['description'],
+        "query": saved_search["queryCondition"]["queryText"]
+    }
+
+    rule_content["detection"] = rule_converted
+
+    mapping = {
+        "detection": "query",
+        "description": "description"
+    }
+    for key in mapping:
+
+        rule_key = key
+        result_key = mapping[key]
+
+        if rule_content.get(rule_key) == result.get(result_key):
+            if parameters.debug:
+                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+        else:
+            logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
+            error = True
 
 
     # Check if disabled
