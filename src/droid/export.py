@@ -8,6 +8,7 @@ from pathlib import Path
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 from droid.color import ColorLogger
 
 def post_rule_content(rule_content):
@@ -71,8 +72,8 @@ def export_rule_raw(parameters: dict, export_config: dict):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+    elif parameters.platform == 'microsoft_defender':
+        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'esql':
         platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "esql", raw=True)
     elif parameters.platform == 'eql':

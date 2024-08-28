@@ -7,6 +7,7 @@ from pathlib import Path
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 from droid.color import ColorLogger
 from droid.export import post_rule_content
 
@@ -142,6 +143,63 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
         return error
 
 
+def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error):
+
+    try:
+        saved_search: dict = platform.get_rule(rule_content["id"])
+    except Exception as e:
+        logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
+        return error
+
+    if saved_search:
+        logger.info(f"Successfully retrieved the rule {rule_file}")
+    else:
+        logger.error(f"Rule not found {rule_file}")
+        error = True
+        return error
+
+    result = {
+        "description": saved_search['detectionAction']['alertTemplate']['description'],
+        "query": saved_search["queryCondition"]["queryText"]
+    }
+
+    rule_content["detection"] = rule_converted
+
+    mapping = {
+        "detection": "query",
+        "description": "description"
+    }
+    for key in mapping:
+
+        rule_key = key
+        result_key = mapping[key]
+
+        if rule_content.get(rule_key) == result.get(result_key):
+            if parameters.debug:
+                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+        else:
+            logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
+            error = True
+
+
+    # Check if disabled
+    is_disabled = rule_content.get('custom', {}).get('disabled')
+
+    if is_disabled and not saved_search["isEnabled"]:
+        logger.info("The rule is disabled as expected")
+    elif is_disabled and saved_search["isEnabled"]:
+        logger.error("The rule is not disabled on the platform")
+        error = True
+    elif is_disabled is None and not saved_search["isEnabled"]:
+        logger.error("The rule is not enabled on the platform")
+        error = True
+    elif is_disabled is None and saved_search["isEnabled"]:
+        logger.info("The rule is enabled as expected")
+
+    if error:
+        return error
+
+
 def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
     try:
         saved_search: dict = platform.get_rule(rule_content["id"])
@@ -223,7 +281,10 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     elif parameters.platform in ["esql", "eql"]:
         error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif 'azure' or 'defender' in parameters.platform:
+    elif parameters.platform == 'microsoft_defender': # TODO: Add Integrity check for Microsoft 365 Defender
+        error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
+        return error
+    elif 'azure' in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
 
@@ -237,8 +298,8 @@ def integrity_rule_raw(parameters: dict, export_config: dict, raw_rule=False):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender' and parameters.sentinel_mde:
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+    elif parameters.platform == 'microsoft_defender':
+        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():
         error_i = False

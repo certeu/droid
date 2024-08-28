@@ -83,8 +83,7 @@ def is_raw_rule(args, base_config):
     else:
         return False
     if (
-        (args.platform in ['splunk', 'azure'] or
-        (args.platform == 'microsoft_defender' and args.sentinel_mde)) and
+        (args.platform in ['splunk', 'azure']) and
         (raw_rule_folder_name in args.rules and args.platform in args.rules)
     ):
         return True
@@ -92,9 +91,11 @@ def is_raw_rule(args, base_config):
         return True
     elif args.platform in ['esql', 'eql']:
         return False
+    elif args.platform == 'microsoft_defender' and raw_rule_folder_name in args.rules:
+        return True
     elif (
         args.platform in ['splunk', 'azure'] or
-        (args.platform == 'microsoft_defender' and args.sentinel_mde)
+        (args.platform == 'microsoft_defender')
     ):
         return False
 
@@ -174,15 +175,7 @@ def droid_platform_config(args, config_path):
         except Exception:
             raise Exception("Something unexpected happened...")
 
-        if args.export or args.search:
-
-            if  (
-                    args.platform == 'microsoft_defender' and
-                    config["search_auth"] != "app" and
-                    config["export_auth"] != "app" and not
-                    args.sentinel_mde
-                ):
-                    exit("Error: DROID only supports Azure App Registration authentication method for MDE.")
+        if args.export or args.search or args.integrity:
 
             if config["search_auth"] == "app":
 
@@ -380,9 +373,12 @@ def main(argv=None) -> None:
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
-        elif args.platform == "microsoft_defender" and not args.sentinel_mde:
-            logger.error("Export mode for MDE is only available via Azure Sentinel backend for now.")
-            exit(1)
+        elif args.platform == "microsoft_defender":
+            if is_raw_rule(args, base_config):
+                logger.info("Microsoft XDR raw rule selected")
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+            else:
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
 
         elif args.platform == 'esql' or args.platform == 'eql':
             args.platform == 'elastic'
