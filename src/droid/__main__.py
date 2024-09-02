@@ -177,7 +177,7 @@ def droid_platform_config(args, config_path):
 
         if args.export or args.search or args.integrity:
 
-            if config["search_auth"] == "app":
+            if config["search_auth"] == "app" and not "credential_file" in config:
 
                 if environ.get('DROID_AZURE_TENANT_ID'):
                     tenant_id = environ.get('DROID_AZURE_TENANT_ID')

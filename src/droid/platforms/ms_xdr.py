@@ -49,14 +49,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         self._query_period = self._parameters["query_period"]
 
-        if 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
-            self._tenant_id = self._parameters["tenant_id"]
-            self._client_id = self._parameters["client_id"]
-            self._client_secret = self._parameters["client_secret"]
-        else:
-            # Default auth
-            self._tenant_id = self._parameters["tenant_id"]
-
         if "credential_file" in self._parameters:
             try:
                 with open(self._parameters["credential_file"], "r") as file:
@@ -66,6 +58,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self._tenant_id = credentials["tenant_id"]
             except Exception as e:
                 raise Exception(f"Error while reading the credential file {e}")
+        elif 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
+            self._tenant_id = self._parameters["tenant_id"]
+            self._client_id = self._parameters["client_id"]
+            self._client_secret = self._parameters["client_secret"]
+        else:
+            # Default auth
+            self._tenant_id = self._parameters["tenant_id"]
+
                 
 
 
