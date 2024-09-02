@@ -197,7 +197,7 @@ def droid_platform_config(args, config_path):
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
 
-            elif config["export_auth"] == "app" and args.export:
+            elif config["export_auth"] == "app" and args.export and not "credential_file" in config:
 
                 if environ.get('DROID_AZURE_TENANT_ID'):
                     tenant_id = environ.get('DROID_AZURE_TENANT_ID')
