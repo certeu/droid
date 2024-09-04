@@ -67,7 +67,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._tenant_id = self._parameters["tenant_id"]
 
 
-
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token = self.acquire_token()
         self._headers = {
