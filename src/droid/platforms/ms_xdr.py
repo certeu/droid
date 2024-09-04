@@ -5,6 +5,7 @@ Module for Microsoft XDR
 import re
 import requests
 import time
+import yaml
 
 from pprint import pprint
 from droid.abstracts import AbstractPlatform
@@ -48,7 +49,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         self._query_period = self._parameters["query_period"]
 
-        if 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
+        if "credential_file" in self._parameters:
+            try:
+                with open(self._parameters["credential_file"], "r") as file:
+                    credentials = yaml.safe_load(file)
+                    self._client_id = credentials["client_id"]
+                    self._client_secret = credentials["client_secret"]
+                    self._tenant_id = credentials["tenant_id"]
+            except Exception as e:
+                raise Exception(f"Error while reading the credential file {e}")
+        elif 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
