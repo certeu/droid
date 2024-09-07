@@ -281,7 +281,7 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     elif parameters.platform in ["esql", "eql"]:
         error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif parameters.platform == 'microsoft_defender': # TODO: Add Integrity check for Microsoft 365 Defender
+    elif parameters.platform == 'kusto': # TODO: Add Integrity check for Microsoft 365 Defender
         error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
     elif 'azure' in parameters.platform:
@@ -298,7 +298,7 @@ def integrity_rule_raw(parameters: dict, export_config: dict, raw_rule=False):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == 'kusto':
         platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
 
     if path.is_dir():

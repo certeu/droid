@@ -72,7 +72,7 @@ def export_rule_raw(parameters: dict, export_config: dict):
         platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'azure':
         platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == 'kusto':
         platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
     elif parameters.platform == 'esql':
         platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "esql", raw=True)
