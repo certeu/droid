@@ -43,13 +43,13 @@ class ColorLogger(logging.Logger):
 
         self.setup_handlers()
 
-    def setup_handlers(self):
+    def setup_handlers(self, log_file="droid.log"):
         format_str = "%(asctime)s:%(levelname)s:%(name)s:%(message)s"
         self.handlers = []
 
         if self.json_enabled:
             json_formatter = jsonlogger.JsonFormatter(format_str)
-            json_handler = logging.FileHandler('droid.log')
+            json_handler = logging.FileHandler(log_file)
             json_handler.setFormatter(json_formatter)
             self.addHandler(json_handler)
             console = logging.StreamHandler()
@@ -68,6 +68,6 @@ class ColorLogger(logging.Logger):
 
             self.addHandler(console)
 
-    def enable_json_logging(self):
+    def enable_json_logging(self, log_file="droid.log"):
         self.json_enabled = True
-        self.setup_handlers()
+        self.setup_handlers(log_file)

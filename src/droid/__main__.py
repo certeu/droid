@@ -46,6 +46,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-m", "--mssp", help="Enable MSSP mode", action="store_true")
     parser.add_argument("-mo", "--module", help="Module mode to return converted rules as a list", action="store_true")
     parser.add_argument("-j", "--json", help="Drop a JSON log file", action="store_true")
+    parser.add_argument("-jo", "--json_output", help="Optional Path for JSON log file")
     parser.add_argument("-i", "--integrity", help="Perform an integrity check on platforms", action="store_true")
     return parser
 
@@ -263,7 +264,11 @@ def main(argv=None) -> None:
 
     # Configure JSON logging if requested
     if args.json:
-        logger.enable_json_logging()
+        if args.json_output:
+            log_file = args.json_output
+        else:
+            log_file="droid.log"
+        logger.enable_json_logging(log_file=log_file)
 
     logging.setLoggerClass(ColorLogger)
 
