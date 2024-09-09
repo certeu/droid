@@ -240,21 +240,21 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     c_value = tag.replace("attack.", "").lower().strip()
                     if c_value in [
                         "reconnaissance",
-                        "resource_development",
-                        "initial_access",
+                        "resource-development",
+                        "initial-access",
                         "execution",
                         "persistence",
-                        "privilege_escalation",
-                        "defense_evasion",
-                        "credential_access",
+                        "privilege-escalation",
+                        "defense-evasion",
+                        "credential-access",
                         "discovery",
-                        "lateral_movement",
+                        "lateral-movement",
                         "collection",
-                        "command_and_control",
+                        "command-and-control",
                         "exfiltration",
                         "impact",
                     ]:
-                        category = c_value.replace("_", " ").title().replace(" ", "")
+                        category = c_value.replace("-", " ").title().replace(" ", "")
         if not category:
             category = "Execution"  # Fallback... this should never happen
         try:
