@@ -17,7 +17,7 @@ from droid.search import search_rule_raw
 from droid.export import export_rule_raw
 from droid.list import list_keys
 from droid.integrity import integrity_rule_raw
-from droid.color import ColorLogger
+from droid.color import configure_logger
 
 def init_argparse() -> argparse.ArgumentParser:
     """Initialise the argument parsers
@@ -46,7 +46,8 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-m", "--mssp", help="Enable MSSP mode", action="store_true")
     parser.add_argument("-mo", "--module", help="Module mode to return converted rules as a list", action="store_true")
     parser.add_argument("-j", "--json", help="Drop a JSON log file", action="store_true")
-    parser.add_argument("-jo", "--json_output", help="Optional Path for JSON log file")
+    parser.add_argument("-jo", "--json_output", help="Optional Path for JSON log file", default="droid.log")
+    parser.add_argument("-js", "--json_stdout", help="Enable Logging to stdout in JSON", action="store_true")
     parser.add_argument("-i", "--integrity", help="Perform an integrity check on platforms", action="store_true")
     return parser
 
@@ -254,25 +255,11 @@ def main(argv=None) -> None:
     parser = init_argparse()
     args = parser.parse_args(argv)
 
-    logger = ColorLogger("droid")
-
-    # Set logger level based on debug flag
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-
-    # Configure JSON logging if requested
-    if args.json:
-        if args.json_output:
-            log_file = args.json_output
-        else:
-            log_file="droid.log"
-        logger.enable_json_logging(log_file=log_file)
-
-    logging.setLoggerClass(ColorLogger)
 
     parameters = args
+    # Configure JSON logging if requested
+    #logger.configure_json_logging(log_file=parameters.json_output, json_stdout=parameters.json_stdout, json_logfile=parameters.json)
+    logger = configure_logger(log_file=parameters.json_output, json_stdout=parameters.json_stdout, debug_mode=args.debug)
 
     if (args.platform or args.update or args.validate) and not args.config_file:
         raise Exception("Please provide a configuration file using -cf/--config-file.")
