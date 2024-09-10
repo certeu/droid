@@ -31,12 +31,6 @@ class Conversion:
         self._debug = debug
         self._json = json
 
-        if self._json:
-            self.logger.enable_json_logging()
-
-        if self._debug:
-            self.logger.info("Initializing droid.convert.Conversion")
-
     def get_pipeline_config_group(self, rule_content):
         """Retrieve the logsource config group name
         Search a match in the configuration in platforms.x.pipelines and fetch the pipeline group name
@@ -158,12 +152,9 @@ def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, pla
     error, search_warning = convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules)
     return error, search_warning
 
-def convert_rules(parameters, droid_config, base_config):
+def convert_rules(parameters, droid_config, base_config, logger_param):
 
-    logger = ColorLogger("droid.convert")
-
-    if parameters.json:
-        logger.enable_json_logging()
+    logger = ColorLogger(__name__, **logger_param)
 
     error = False
     search_warning = False
