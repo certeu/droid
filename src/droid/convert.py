@@ -15,9 +15,7 @@ from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
 from droid.platforms.ms_xdr import MicrosoftXDRPlatform
-from droid.color import configure_logger
-
-logger = configure_logger()
+from droid.color import ColorLogger
 
 class Conversion:
     """Base class handling the conversion
@@ -26,12 +24,15 @@ class Conversion:
         parameters(dict)
     """
     def __init__(self, parameters: dict, base_config, platform_name, debug, json) -> None:
-        self.logger = logger
+        self.logger = ColorLogger("droid.convert.Conversion")
         self._parameters = parameters["pipelines"]
         self._filters_directory = base_config.get('sigma_filters_directory', None)
         self._platform_name = platform_name
         self._debug = debug
         self._json = json
+
+        if self._json:
+            self.logger.enable_json_logging()
 
         if self._debug:
             self.logger.info("Initializing droid.convert.Conversion")
@@ -159,6 +160,10 @@ def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, pla
 
 def convert_rules(parameters, droid_config, base_config):
 
+    logger = ColorLogger("droid.convert")
+
+    if parameters.json:
+        logger.enable_json_logging()
 
     error = False
     search_warning = False
