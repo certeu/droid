@@ -7,10 +7,7 @@ from pathlib import Path
 from sigma.plugins import InstalledSigmaPlugins
 from droid.color import ColorLogger
 
-
-logger = ColorLogger("droid.list")
-
-def load_rule(parameters, rule_file):
+def load_rule(parameters, rule_file, logger):
     """Load rule
     Load any detection rule in YAML format
 
@@ -61,7 +58,7 @@ def list_unique_keys(rule, unique_keys) -> None:
 
     return unique_keys_list
 
-def list_keys(parameters) -> None:
+def list_keys(parameters, logger_param) -> None:
     """List keys features
     Gather multiple listing mode such as:
         unique_fields: list all the unique fields in the Sigma detection section
@@ -70,6 +67,9 @@ def list_keys(parameters) -> None:
     Output:
         Prints out the results.
     """
+
+    logger = ColorLogger(__name__, **logger_param)
+
     if 'unique_fields' in parameters.list:
         path = Path(parameters.rules)
         unique_keys = set()

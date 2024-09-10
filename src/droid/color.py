@@ -37,7 +37,10 @@ class ColorFormatter(logging.Formatter):
 
 class ColorLogger(logging.Logger):
     def __init__(self, name, debug_mode=False, json_enabled=False, json_stdout=False, log_file=None):
-        super().__init__(name, logging.DEBUG)
+        if debug_mode:
+            super().__init__(name, logging.DEBUG)
+        else:
+            super().__init__(name, logging.WARNING)
         self.json_enabled = json_enabled
         self.json_stdout = json_stdout
         self.log_file = log_file

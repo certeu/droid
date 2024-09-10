@@ -26,14 +26,13 @@ logger = ColorLogger("droid.platforms.sentinel")
 
 class SentinelPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
+    def __init__(self, parameters: dict, logger_param: dict) -> None:
 
         super().__init__(name="Sentinel")
 
         self._parameters = parameters
 
-        self._debug = debug
-        self._json = json
+        self.logger = ColorLogger(__name__, **logger_param)
 
         if 'threshold_operator' not in self._parameters:
             raise Exception('SentinelPlatform: "threshold_operator" parameter is required.')
@@ -70,11 +69,6 @@ class SentinelPlatform(AbstractPlatform):
         if 'timeout' not in self._parameters:
             raise Exception('SentinelPlatform: "timeout" parameter is required.')
 
-        self.logger = ColorLogger("droid.platforms.sentinel.SentinelPlatform")
-
-        if self._json:
-             self.logger.enable_json_logging()
-
         self._workspace_id = self._parameters["workspace_id"]
         self._workspace_name = self._parameters["workspace_name"]
         self._subscription_id = self._parameters["subscription_id"]
@@ -107,8 +101,7 @@ class SentinelPlatform(AbstractPlatform):
         Authenticate on Azure using a authentication method and return the credential object
         """
         if self._parameters["search_auth"] == "default":
-            if self._debug:
-                self.logger.debug("Default credential selected")
+            self.logger.debug("Default credential selected")
             credential = DefaultAzureCredential()
         else:
             credential = ClientSecretCredential(self._tenant_id, self._client_id, self._client_secret)
@@ -173,11 +166,9 @@ class SentinelPlatform(AbstractPlatform):
         credential = self.get_credentials()
 
         try:
-            if self._debug:
-                self.logger.debug("Creating the client instance")
+            self.logger.debug("Creating the client instance")
             client = LogsQueryClient(credential)
-            if self._debug:
-                self.logger.debug("Successfully created the client instance")
+            self.logger.debug("Successfully created the client instance")
         except HttpResponseError as e:
             self.logger.error(f"Error while connecting to Azure error: {e}")
 
@@ -215,8 +206,7 @@ class SentinelPlatform(AbstractPlatform):
                 return total_result
 
             else:
-                if self._debug:
-                    self.logger.debug(f"Querying the workspace {self._workspace_id}")
+                self.logger.debug(f"Querying the workspace {self._workspace_id}")
                 results = client.query_workspace(self._workspace_id,
                                                  rule_converted,
                                                  timespan=(start_time, current_time),

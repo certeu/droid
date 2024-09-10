@@ -13,19 +13,18 @@ from droid.color import ColorLogger
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 
-logger = ColorLogger("droid.platforms.msxdr")
-
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
+    def __init__(
+            self, parameters: dict, debug: bool, json: bool,
+            logger_param: dict) -> None:
 
         super().__init__(name="Microsoft XDR")
 
-        self._parameters = parameters
+        self.logger = ColorLogger(__name__, **logger_param)
 
-        self._debug = debug
-        self._json = json
+        self._parameters = parameters
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -41,11 +40,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception(
                 'MicrosoftXDRPlatform: "query_period" parameter must be one of "0", "1H", "3H", "12H" or "24H".'
             )
-
-        self.logger = ColorLogger("droid.platforms.msxdr.MicrosoftXDRPlatform")
-
-        if self._json:
-            self.logger.enable_json_logging()
 
         self._query_period = self._parameters["query_period"]
 
@@ -175,8 +169,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         scope = ["https://graph.microsoft.com/.default"]
 
         if self._parameters["search_auth"] == "default":
-            if self._debug:
-                self.logger.debug("Default credential selected")
+            self.logger.debug("Default credential selected")
 
             # Use DefaultAzureCredential to acquire a token
             credential = DefaultAzureCredential()

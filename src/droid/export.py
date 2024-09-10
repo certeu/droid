@@ -40,14 +40,13 @@ def load_rule(rule_file):
 
 def export_rule(
         parameters: dict, rule_content: object, rule_converted: str,
-        platform: object, rule_file: str, error: bool):
+        platform: object, rule_file: str, error: bool,
+        logger_param: dict):
 
-    logger = ColorLogger("droid.export")
+    logger = ColorLogger(__name__, **logger_param)
 
     rule_content = post_rule_content(rule_content)
 
-    if parameters.json:
-        logger.enable_json_logging()
     try:
         if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
             platform.remove_rule(rule_content, rule_converted, rule_file)
@@ -61,23 +60,22 @@ def export_rule(
     logger.info(f"Successfully exported the rule {rule_file}")
     return error
 
-def export_rule_raw(parameters: dict, export_config: dict):
-    logger = ColorLogger("droid.export")
+def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
+
+    logger = ColorLogger(__name__, **logger_param)
 
     path = Path(parameters.rules)
 
     error = False
 
     if parameters.platform == 'splunk':
-        platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
+        platform = SplunkPlatform(export_config, logger_param)
     elif parameters.platform == 'azure':
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+        platform = SentinelPlatform(export_config, logger_param)
     elif parameters.platform == 'microsoft_defender':
-        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
-    elif parameters.platform == 'esql':
-        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "esql", raw=True)
-    elif parameters.platform == 'eql':
-        platform = ElasticPlatform(export_config, parameters.debug, parameters.json, "eql", raw=True)
+        platform = MicrosoftXDRPlatform(export_config, logger_param)
+    elif parameters.platform == 'esql' or parameters.platform == 'eql':
+        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
 
     if path.is_dir():
         error_i = False

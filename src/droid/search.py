@@ -101,9 +101,9 @@ def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, pa
         error = True
         return error, search_warning
 
-def search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning):
+def search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, logger_param):
 
-    logger = ColorLogger("droid.search")
+    logger = ColorLogger(__name__, **logger_param)
 
     error = False
     search_warning = False
@@ -111,9 +111,6 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
     if rule_content.get('custom', {}).get('ignore_search', False):
         logger.warning(f"Search is ignored for {rule_file}")
         return error, search_warning
-
-    if parameters.json:
-        logger.enable_json_logging()
 
     if parameters.platform == 'splunk':
         error, search_warning = search_rule_splunk(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
@@ -134,7 +131,9 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
             error, search_warning = search_rule_sentinel(rule_converted, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=False)
             return error, search_warning
 
-def search_rule_raw(parameters: dict, export_config: dict):
+def search_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
+
+    logger = ColorLogger(__name__, **logger_param)
 
     error = False
     search_warning = False
@@ -142,11 +141,13 @@ def search_rule_raw(parameters: dict, export_config: dict):
     path = Path(parameters.rules)
 
     if parameters.platform == 'splunk':
-        platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
+        platform = SplunkPlatform(export_config, logger_param)
     elif parameters.platform == 'azure':
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+        platform = SentinelPlatform(export_config, logger_param)
     elif parameters.platform == 'microsoft_defender':
-        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
+        platform = MicrosoftXDRPlatform(export_config, logger_param)
+    elif parameters.platform == 'esql' or parameters.platform == 'eql':
+        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
 
     if path.is_dir():
         error_i = False
@@ -154,7 +155,7 @@ def search_rule_raw(parameters: dict, export_config: dict):
         for rule_file in path.rglob("*.y*ml"):
             rule_content = load_rule(rule_file)
             rule_converted = rule_content['detection']
-            error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning)
+            error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, logger_param)
             if error:
                 error_i = True
             if search_warning:
@@ -169,7 +170,7 @@ def search_rule_raw(parameters: dict, export_config: dict):
         rule_file = path
         rule_content = load_rule(rule_file)
         rule_converted = rule_content['detection']
-        error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning)
+        error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, logger_param)
     else:
         print(f"The path {path} is neither a directory nor a file.")
 

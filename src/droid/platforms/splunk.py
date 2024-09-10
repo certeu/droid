@@ -13,14 +13,12 @@ logger = ColorLogger("droid.platforms.splunk")
 
 class SplunkPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
+    def __init__(self, parameters: dict, logger_param: dict) -> None:
 
         super().__init__(name="Splunk")
 
+        self.logger = ColorLogger(__name__, **logger_param)
         self._parameters = parameters
-
-        self._debug = debug
-        self._json = json
 
         if 'url' not in self._parameters:
             raise Exception('SplunkPlatform: "url" parameter is required.')
@@ -34,11 +32,6 @@ class SplunkPlatform(AbstractPlatform):
             raise Exception('SplunkPlatform: "earliest_time" parameter is required.')
         if 'latest_time' not in self._parameters:
             raise Exception('SplunkPlatform: "latest_time" parameter is required.')
-
-        self.logger = ColorLogger("droid.platforms.splunk.SplunkPlatform")
-
-        if self._json:
-             self.logger.enable_json_logging()
 
         self._url = self._parameters['url']
         self._user = self._parameters['user']

@@ -290,7 +290,7 @@ def main(argv=None) -> None:
             logger.info("Raw rules are not subject to Sigma validation.")
             exit(0)
 
-        rule_error = validate_rules(parameters, False, base_config)
+        rule_error = validate_rules(parameters, False, base_config, logger_param)
 
         if rule_error:
             logger.error("Validation issues found")
@@ -330,10 +330,10 @@ def main(argv=None) -> None:
 
         if is_raw_rule(args, base_config):
             logger.info(f"Searching raw rule for platform {args.platform} selected")
-            search_error, search_warning = search_rule_raw(parameters, droid_platform_config(args, config_path))
+            search_error, search_warning = search_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
         else:
             logger.info(f"Searching Sigma rule for platform {args.platform} selected")
-            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+            search_error, search_warning = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         if search_error and search_warning:
             logger.warning("Hits found while search one or multiple rules")
@@ -360,38 +360,38 @@ def main(argv=None) -> None:
         if args.platform == 'splunk':
             if is_raw_rule(args, base_config):
                 logger.info("Splunk raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         elif args.platform == 'azure':
             if is_raw_rule(args, base_config):
                 logger.info("Azure Sentinel raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         elif args.platform == 'microsoft_defender' and args.sentinel_mde:
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft Defender for Endpoint raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         elif args.platform == "microsoft_defender":
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft XDR raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         elif args.platform == 'esql' or args.platform == 'eql':
             args.platform == 'elastic'
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path))
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         else:
             logger.error("Please select one platform. See option -p in --help")
@@ -412,7 +412,7 @@ def main(argv=None) -> None:
     elif args.list:
 
         logger.info(f"List mode was selected - path selected: {args.rules}")
-        list_keys_errors = list_keys(parameters)
+        list_keys_errors = list_keys(parameters, logger_param)
 
     elif args.integrity:
 
@@ -422,10 +422,10 @@ def main(argv=None) -> None:
 
         if is_raw_rule(args, base_config):
             logger.info(f"Integrity check for platform {args.platform} selected")
-            integrity_error = integrity_rule_raw(parameters, droid_platform_config(args, config_path))
+            integrity_error = integrity_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
         else:
             logger.info(f"Integrity check for platform {args.platform} selected")
-            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config)
+            integrity_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
         if integrity_error:
             logger.error("Integrity error")
