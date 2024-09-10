@@ -643,7 +643,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         while True:
             response = requests.patch(api_url, headers=headers, json=payload)
             if response.status_code == 429:
-                logger.debug("Rate limit reached, waiting 60 seconds")
+                self.logger.debug("Rate limit reached, waiting 60 seconds")
                 time.sleep(60)
             else:
                 break

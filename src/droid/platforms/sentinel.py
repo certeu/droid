@@ -21,9 +21,6 @@ from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 
-logger = ColorLogger("droid.platforms.sentinel")
-
-
 class SentinelPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, logger_param: dict) -> None:

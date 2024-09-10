@@ -9,8 +9,6 @@ from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
 from splunklib.binding import AuthenticationError
 
-logger = ColorLogger("droid.platforms.splunk")
-
 class SplunkPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, logger_param: dict) -> None:
@@ -113,7 +111,7 @@ class SplunkPlatform(AbstractPlatform):
         stats["jobUrl"] = job_url
 
         if stats["isFailed"] == "1":
-            logger.error(f"Failed to search the rule: " + job_url)
+            self.logger.error(f"Failed to search the rule: " + job_url)
             raise
         else:
             return stats
