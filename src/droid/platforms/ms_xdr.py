@@ -16,9 +16,7 @@ from azure.identity import DefaultAzureCredential
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
-    def __init__(
-            self, parameters: dict, debug: bool, json: bool,
-            logger_param: dict) -> None:
+    def __init__(self, parameters: dict, logger_param: dict) -> None:
 
         super().__init__(name="Microsoft XDR")
 
@@ -52,7 +50,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self._tenant_id = credentials["tenant_id"]
             except Exception as e:
                 raise Exception(f"Error while reading the credential file {e}")
-        elif 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
+        elif "app" in (
+            self._parameters["search_auth"] or self._parameters["export_auth"]
+        ):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
@@ -145,15 +145,18 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
-                        "rule_content": rule_content})
+                        "rule_content": rule_content,
+                    },
+                )
             else:
                 self.logger.error(
                     f"Could not deleted {rule_file} - error: {response.json()['error']['message']}",
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
-                        "rule_content": rule_content
-                    })
+                        "rule_content": rule_content,
+                    },
+                )
                 raise
         else:
             self.logger.info(
@@ -161,7 +164,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 extra={
                     "rule_file": rule_file,
                     "rule_converted": rule_converted,
-                    "rule_content": rule_content})
+                    "rule_content": rule_content,
+                },
+            )
 
     def acquire_token(self):
         # MSAL configuration
@@ -179,7 +184,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             # Create a confidential client application
             app = ConfidentialClientApplication(
-                self._client_id, authority=authority, client_credential=self._client_secret
+                self._client_id,
+                authority=authority,
+                client_credential=self._client_secret,
             )
 
             # Acquire a token
@@ -189,7 +196,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 token = result["access_token"]
                 return token
             else:
-                self.logger.error(f'Failed to acquire token: {result["error_description"]}')
+                self.logger.error(
+                    f'Failed to acquire token: {result["error_description"]}'
+                )
                 exit()
 
     def create_rule(self, rule_content, rule_converted, rule_file):
