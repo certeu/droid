@@ -46,6 +46,13 @@ class ColorLogger(logging.Logger):
         self.log_file = log_file
         self.debug_mode = debug_mode
 
+        if self.json_stdout:
+            self.json_enabled = True
+            self.log_file = None
+        elif self.log_file:
+            self.json_enabled = True
+            self.json_stdout = False
+
         self.setup_handlers()
 
     def setup_handlers(self):

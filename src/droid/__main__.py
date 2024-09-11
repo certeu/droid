@@ -255,9 +255,6 @@ def main(argv=None) -> None:
     parser = init_argparse()
     args = parser.parse_args(argv)
 
-    if (args.json_output or args.json_stdout) and not args.json:
-        raise Exception("Please enable JSON logging using -j/--json")
-
     logger_param = {
         "debug_mode": args.debug,
         "json_enabled": args.json,
