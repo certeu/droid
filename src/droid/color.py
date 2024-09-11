@@ -46,9 +46,6 @@ class ColorLogger(logging.Logger):
         self.log_file = log_file
         self.debug_mode = debug_mode
 
-        if self.log_file:
-            self.json_enabled = True
-
         self.setup_handlers()
 
     def setup_handlers(self):
@@ -61,7 +58,7 @@ class ColorLogger(logging.Logger):
             json_formatter = jsonlogger.JsonFormatter(format_str)
 
             if self.json_stdout:
-                # Log JSON output to console (stdout)
+                # Log JSON output to console (stdout) only
                 json_console_handler = logging.StreamHandler()
                 json_console_handler.setFormatter(json_formatter)
                 self.addHandler(json_console_handler)
@@ -71,15 +68,15 @@ class ColorLogger(logging.Logger):
                 json_file_handler.setFormatter(json_formatter)
                 self.addHandler(json_file_handler)
 
-        # Console logging with color formatting
-        color_formatter = ColorFormatter(format_str)
-        console = logging.StreamHandler()
-        console.setFormatter(color_formatter)
+        if not self.json_stdout:
+            # Console logging with color formatting if JSON is not enabled for stdout
+            color_formatter = ColorFormatter(format_str)
+            console = logging.StreamHandler()
+            console.setFormatter(color_formatter)
 
-        # Add AzureLogFilter only when not in debug mode
-        if not self.debug_mode:
-            azure_filter = AzureLogFilter(debug_mode=self.debug_mode)
-            console.addFilter(azure_filter)
+            # Add AzureLogFilter only when not in debug mode
+            if not self.debug_mode:
+                azure_filter = AzureLogFilter(debug_mode=self.debug_mode)
+                console.addFilter(azure_filter)
 
-        self.addHandler(console)
-
+            self.addHandler(console)
