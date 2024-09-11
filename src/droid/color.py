@@ -41,17 +41,15 @@ class ColorLogger(logging.Logger):
             super().__init__(name, logging.DEBUG)
         else:
             super().__init__(name, logging.WARNING)
+        if not log_file:
+            log_file = "droid.log"
+        if log_file:
+            json_enabled = True
         self.json_enabled = json_enabled
         self.json_stdout = json_stdout
         self.log_file = log_file
         self.debug_mode = debug_mode
 
-        if self.json_stdout:
-            self.json_enabled = True
-            self.log_file = None
-        elif self.log_file:
-            self.json_enabled = True
-            self.json_stdout = False
 
         self.setup_handlers()
 
@@ -61,29 +59,24 @@ class ColorLogger(logging.Logger):
         self.handlers = []  # Clear existing handlers
 
         if self.json_enabled:
-            # Set up JSON logging
+            # Set up JSON file out
             json_formatter = jsonlogger.JsonFormatter(format_str)
-
-            if self.json_stdout:
-                # Log JSON output to console (stdout) only
-                json_console_handler = logging.StreamHandler()
-                json_console_handler.setFormatter(json_formatter)
-                self.addHandler(json_console_handler)
-            else:
-                # Log JSON output to a file
-                json_file_handler = logging.FileHandler(self.log_file)
-                json_file_handler.setFormatter(json_formatter)
-                self.addHandler(json_file_handler)
-
-        if not self.json_stdout:
+            # Log JSON output to a file
+            json_file_handler = logging.FileHandler(self.log_file)
+            json_file_handler.setFormatter(json_formatter)
+            self.addHandler(json_file_handler)
+        
+        if self.json_stdout:
+            stdout_formater = jsonlogger.JsonFormatter(format_str)
+        else:
             # Console logging with color formatting if JSON is not enabled for stdout
-            color_formatter = ColorFormatter(format_str)
-            console = logging.StreamHandler()
-            console.setFormatter(color_formatter)
+            stdout_formater = ColorFormatter(format_str)
+        console = logging.StreamHandler()
+        console.setFormatter(stdout_formater)
 
-            # Add AzureLogFilter only when not in debug mode
-            if not self.debug_mode:
-                azure_filter = AzureLogFilter(debug_mode=self.debug_mode)
-                console.addFilter(azure_filter)
+        # Add AzureLogFilter only when not in debug mode
+        if not self.debug_mode:
+            azure_filter = AzureLogFilter(debug_mode=self.debug_mode)
+            console.addFilter(azure_filter)
 
-            self.addHandler(console)
+        self.addHandler(console)

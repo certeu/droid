@@ -46,7 +46,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-m", "--mssp", help="Enable MSSP mode", action="store_true")
     parser.add_argument("-mo", "--module", help="Module mode to return converted rules as a list", action="store_true")
     parser.add_argument("-j", "--json", help="Drop a JSON log file", action="store_true")
-    parser.add_argument("-jo", "--json-output", help="Optional path for JSON log file", default="droid.log")
+    parser.add_argument("-jo", "--json-output", help="Optional path for JSON log file")
     parser.add_argument("-js", "--json-stdout", help="Enable logging to stdout in JSON", action="store_true")
     parser.add_argument("-i", "--integrity", help="Perform an integrity check on platforms", action="store_true")
     return parser
@@ -261,7 +261,6 @@ def main(argv=None) -> None:
         "json_stdout": args.json_stdout,
         "log_file": args.json_output
     }
-
     logger = ColorLogger("droid", **logger_param)
 
     # Set logger level based on debug flag
