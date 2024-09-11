@@ -14,8 +14,7 @@ def load_rule(parameters, rule_file, logger):
     Returns:
         YAML object
     """
-    if parameters.debug:
-        logger.debug("processing rule {0}".format(rule_file))
+    logger.debug("processing rule {0}".format(rule_file))
 
     with open(rule_file, 'r') as stream:
         try:

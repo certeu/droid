@@ -19,8 +19,7 @@ yaml.preserve_quotes = True
 
 def load_rule(parameters, rule_file, logger):
 
-    if parameters.debug:
-        logger.debug("processing rule {0}".format(rule_file))
+    logger.debug("processing rule {0}".format(rule_file))
 
     with open(rule_file, 'r') as stream:
         try:
@@ -57,8 +56,7 @@ def update_rule_content(parameters, new_data, target_file_path, logger):
         if updated_keys != []:
             logger.info(f"Updated rule {existing_data['title']} from file {target_file_path}")
 
-        if parameters.debug:
-            logger.debug(f"Updated data {existing_data} in {target_file_path}")
+        logger.debug(f"Updated data {existing_data} in {target_file_path}")
 
         with open(target_file_path, 'w') as f:
             yaml.dump(existing_data, f)
