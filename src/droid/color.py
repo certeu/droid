@@ -41,10 +41,10 @@ class ColorLogger(logging.Logger):
             super().__init__(name, logging.DEBUG)
         else:
             super().__init__(name, logging.WARNING)
-        if not log_file:
-            log_file = "droid.log"
         if log_file:
             json_enabled = True
+        if not log_file:
+            log_file = "droid.log"
         self.json_enabled = json_enabled
         self.json_stdout = json_stdout
         self.log_file = log_file
