@@ -13,19 +13,16 @@ from droid.color import ColorLogger
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 
-logger = ColorLogger("droid.platforms.msxdr")
-
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, debug: bool, json: bool) -> None:
+    def __init__(self, parameters: dict, logger_param: dict) -> None:
 
         super().__init__(name="Microsoft XDR")
 
-        self._parameters = parameters
+        self.logger = ColorLogger(__name__, **logger_param)
 
-        self._debug = debug
-        self._json = json
+        self._parameters = parameters
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -42,11 +39,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 'MicrosoftXDRPlatform: "query_period" parameter must be one of "0", "1H", "3H", "12H" or "24H".'
             )
 
-        self.logger = ColorLogger("droid.platforms.msxdr.MicrosoftXDRPlatform")
-
-        if self._json:
-            self.logger.enable_json_logging()
-
         self._query_period = self._parameters["query_period"]
 
         if "credential_file" in self._parameters:
@@ -58,7 +50,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self._tenant_id = credentials["tenant_id"]
             except Exception as e:
                 raise Exception(f"Error while reading the credential file {e}")
-        elif 'app' in (self._parameters["search_auth"] or self._parameters["export_auth"]):
+        elif "app" in (
+            self._parameters["search_auth"] or self._parameters["export_auth"]
+        ):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
@@ -151,15 +145,18 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
-                        "rule_content": rule_content})
+                        "rule_content": rule_content,
+                    },
+                )
             else:
                 self.logger.error(
                     f"Could not deleted {rule_file} - error: {response.json()['error']['message']}",
                     extra={
                         "rule_file": rule_file,
                         "rule_converted": rule_converted,
-                        "rule_content": rule_content
-                    })
+                        "rule_content": rule_content,
+                    },
+                )
                 raise
         else:
             self.logger.info(
@@ -167,7 +164,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 extra={
                     "rule_file": rule_file,
                     "rule_converted": rule_converted,
-                    "rule_content": rule_content})
+                    "rule_content": rule_content,
+                },
+            )
 
     def acquire_token(self):
         # MSAL configuration
@@ -175,8 +174,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         scope = ["https://graph.microsoft.com/.default"]
 
         if self._parameters["search_auth"] == "default":
-            if self._debug:
-                self.logger.debug("Default credential selected")
+            self.logger.debug("Default credential selected")
 
             # Use DefaultAzureCredential to acquire a token
             credential = DefaultAzureCredential()
@@ -186,7 +184,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             # Create a confidential client application
             app = ConfidentialClientApplication(
-                self._client_id, authority=authority, client_credential=self._client_secret
+                self._client_id,
+                authority=authority,
+                client_credential=self._client_secret,
             )
 
             # Acquire a token
@@ -196,7 +196,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 token = result["access_token"]
                 return token
             else:
-                self.logger.error(f'Failed to acquire token: {result["error_description"]}')
+                self.logger.error(
+                    f'Failed to acquire token: {result["error_description"]}'
+                )
                 exit()
 
     def create_rule(self, rule_content, rule_converted, rule_file):
@@ -650,7 +652,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         while True:
             response = requests.patch(api_url, headers=headers, json=payload)
             if response.status_code == 429:
-                logger.debug("Rate limit reached, waiting 60 seconds")
+                self.logger.debug("Rate limit reached, waiting 60 seconds")
                 time.sleep(60)
             else:
                 break

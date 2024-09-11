@@ -13,16 +13,13 @@ from ruamel.yaml import YAML
 from droid.color import ColorLogger
 from pathlib import Path
 
-logger = ColorLogger("droid.sources.sigmahq")
-
 yaml = YAML()
 
 yaml.preserve_quotes = True
 
-def load_rule(parameters, rule_file):
+def load_rule(parameters, rule_file, logger):
 
-    if parameters.debug:
-        logger.debug("processing rule {0}".format(rule_file))
+    logger.debug("processing rule {0}".format(rule_file))
 
     with open(rule_file, 'r') as stream:
         try:
@@ -44,7 +41,7 @@ def update_with_tracking(existing_data, new_data):
             updated_keys.append(key)
             existing_data[key] = value
 
-def update_rule_content(parameters, new_data, target_file_path):
+def update_rule_content(parameters, new_data, target_file_path, logger):
     """Update rule content
     Function used to update a Sigma rule
     """
@@ -59,8 +56,7 @@ def update_rule_content(parameters, new_data, target_file_path):
         if updated_keys != []:
             logger.info(f"Updated rule {existing_data['title']} from file {target_file_path}")
 
-        if parameters.debug:
-            logger.debug(f"Updated data {existing_data} in {target_file_path}")
+        logger.debug(f"Updated data {existing_data} in {target_file_path}")
 
         with open(target_file_path, 'w') as f:
             yaml.dump(existing_data, f)
@@ -69,7 +65,7 @@ def update_rule_content(parameters, new_data, target_file_path):
         logger.error(f"Error while updating the rule - reason: {e}")
         error = True
 
-def download_sigma_core():
+def download_sigma_core(logger):
     """SigmaHQ/Core
     Function used to download SigmaHQ/Core rules
     """
@@ -112,12 +108,14 @@ def download_sigma_core():
     return asset_name
 
 
-def update_sigmahq_core(parameters):
+def update_sigmahq_core(parameters, logger_param):
     """Update rules
     """
     # Sigma Core
 
-    rules_zip = download_sigma_core()
+    logger = ColorLogger(__name__, **logger_param)
+
+    rules_zip = download_sigma_core(logger)
     with ZipFile(f"tmp/{rules_zip}", 'r') as zip_ref:
         zip_ref.extractall("tmp/")
         zip_ref.close()
@@ -136,10 +134,10 @@ def update_sigmahq_core(parameters):
         if len(matching_files) != 0:
             new_data = load_rule(parameters, rule_file)
             for target_file_path in matching_files:
-                update_rule_content(parameters, new_data, target_file_path)
+                update_rule_content(parameters, new_data, target_file_path, logger)
         else:
             new_rule = str(rule_file).replace(f"{source_path}", f"{target_path}")
-            rule = load_rule(parameters, rule_file)
+            rule = load_rule(parameters, rule_file, logger)
             rule_name = rule['title']
 
             logger.info(f"New rule! Adding: {rule_name} from {new_rule}")

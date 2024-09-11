@@ -56,8 +56,7 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
         result_key = mapping[key]
 
         if rule_content.get(rule_key) == result.get(result_key):
-            if parameters.debug:
-                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
         else:
             logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
             error = True
@@ -119,8 +118,7 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
         result_key = mapping[key]
 
         if rule_content.get(rule_key) == result.get(result_key):
-            if parameters.debug:
-                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
         else:
             logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
             error = True
@@ -175,8 +173,7 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         result_key = mapping[key]
 
         if rule_content.get(rule_key) == result.get(result_key):
-            if parameters.debug:
-                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
         else:
             logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
             error = True
@@ -236,8 +233,7 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
         result_key = mapping[key]
 
         if rule_content.get(rule_key) == result.get(result_key):
-            if parameters.debug:
-                logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
+            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
         else:
             logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
             error = True
@@ -262,18 +258,13 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
     if error:
         return error
 
+def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param):
 
-
-def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error):
-
-    logger = ColorLogger("droid.integrity")
+    logger = ColorLogger(__name__, **logger_param)
 
     error = False
 
     rule_content = post_rule_content(rule_content)
-
-    if parameters.json:
-        logger.enable_json_logging()
 
     if parameters.platform == 'splunk':
         error = integrity_rule_splunk(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
@@ -288,18 +279,20 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
 
-def integrity_rule_raw(parameters: dict, export_config: dict, raw_rule=False):
+def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict, raw_rule=False):
 
     error = False
-
+    logger = ColorLogger(__name__, **logger_param)
     path = Path(parameters.rules)
 
     if parameters.platform == 'splunk':
-        platform = SplunkPlatform(export_config, parameters.debug, parameters.json)
+        platform = SplunkPlatform(export_config, logger_param)
     elif parameters.platform == 'azure':
-        platform = SentinelPlatform(export_config, parameters.debug, parameters.json)
+        platform = SentinelPlatform(export_config, logger_param)
     elif parameters.platform == 'microsoft_defender':
-        platform = MicrosoftXDRPlatform(export_config, parameters.debug, parameters.json)
+        platform = MicrosoftXDRPlatform(export_config, logger_param)
+    elif parameters.platform == 'esql' or parameters.platform == 'eql':
+        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
 
     if path.is_dir():
         error_i = False

@@ -17,19 +17,17 @@ from sigma.data.mitre_attack import (
 
 from elasticsearch import Elasticsearch
 
-logger = ColorLogger("droid.platforms.elastic")
-
 class ElasticPlatform(AbstractPlatform):
 
     def __init__(
-        self, parameters: dict, debug: bool, json: bool, language: str, raw: bool=False
-    ) -> None:
+        self, parameters: dict, logger_param: bool,
+        language: str, raw: bool=False) -> None:
+
         super().__init__(name="Elastic")
 
         self._parameters = parameters
-        self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
-        self._debug = debug
-        self._json = json
+
+        self.logger = ColorLogger(__name__, **logger_param)
 
         if "kibana_url" not in self._parameters:
             raise ValueError("ElasticPlatform: 'kibana_url' is not set.")
@@ -86,11 +84,6 @@ class ElasticPlatform(AbstractPlatform):
                 "ElasticPlatform: 'legacy_esql' is not set, using default of False."
             )
             self._parameters["legacy_esql"] = False
-
-        self.logger = ColorLogger("droid.platforms.elastic.ElasticPlatform")
-
-        if self._json:
-            self.logger.enable_json_logging()
 
         self._eql_search_range_gte = self._parameters["eql_search_range_gte"]
         self._esql_search_range_gte = self._parameters["esql_search_range_gte"]

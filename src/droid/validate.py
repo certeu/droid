@@ -13,19 +13,13 @@ from droid.color import ColorLogger
 
 class SigmaValidation:
 
-    def __init__(self, base_config, debug, json) -> None:
+    def __init__(self, base_config, logger_param) -> None:
         self._parameters = base_config
         self._validation_config_path = self._parameters["sigma_validation_config"]
-        self._debug = debug
-        self._json = json
-        self.logger = ColorLogger("droid.validate.SigmaValidation")
 
-        if self._json:
-            self.logger.enable_json_logging()
+        self.logger = ColorLogger(__name__, **logger_param)
 
-        if self._debug:
-            self.logger.info("Initializing droid.validate.SigmaValidation")
-
+        self.logger.debug("Initializing droid.validate.SigmaValidation")
 
     def validators(self) -> None:
         return InstalledSigmaPlugins.autodiscover().validators
@@ -57,8 +51,7 @@ class SigmaValidation:
 
 def load_rule(parameters, logger, rule_file):
 
-    if parameters.debug:
-        logger.debug("processing rule {0}".format(rule_file), extra={"rule_file": rule_file})
+    logger.debug("processing rule {0}".format(rule_file), extra={"rule_file": rule_file})
 
     with open(rule_file, 'r') as stream:
         try:
@@ -70,12 +63,9 @@ def load_rule(parameters, logger, rule_file):
 
     return object
 
-def validate_rules(parameters, return_objects, base_config) -> None:
+def validate_rules(parameters, return_objects, base_config, logger_param) -> None:
 
-    logger = ColorLogger("droid.validate")
-
-    if parameters.json:
-        logger.enable_json_logging()
+    logger = ColorLogger(__name__, **logger_param)
 
     error = False
 
@@ -85,7 +75,7 @@ def validate_rules(parameters, return_objects, base_config) -> None:
 
     path = Path(parameters.rules)
 
-    validation = SigmaValidation(base_config, parameters.debug, parameters.json)
+    validation = SigmaValidation(base_config, logger_param)
 
     validation.init_validator() # First, initiate the validator class
 
@@ -127,16 +117,14 @@ def validate_sigma_content(rule, parameters, logger, validation, rule_file, rule
 
         for issue in sigma_issues:
             print(f"{issue.description} - severity {issue.severity.name} at:\n\t {rule_file}")
-            if parameters.debug:
-                logger.debug(f"Issue for rule {rule_file}: {issue}")
+            logger.debug(f"Issue for rule {rule_file}: {issue}")
 
         return errors
 
     if rule['id'] in rule_uuids:
         duplicate_uuids = f"Duplicate UUID found: {rule['id']} in rule {rule_file}"
         print(duplicate_uuids)
-        if parameters.debug:
-            logger.debug(f"Issue for rule {rule_file}: {duplicate_uuids}")
+        logger.debug(f"Issue for rule {rule_file}: {duplicate_uuids}")
         errors.append(duplicate_uuids)
         return errors
     else:
