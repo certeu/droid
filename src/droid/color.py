@@ -65,7 +65,7 @@ class ColorLogger(logging.Logger):
             json_file_handler = logging.FileHandler(self.log_file)
             json_file_handler.setFormatter(json_formatter)
             self.addHandler(json_file_handler)
-        
+
         if self.json_stdout:
             stdout_formater = jsonlogger.JsonFormatter(format_str)
         else:

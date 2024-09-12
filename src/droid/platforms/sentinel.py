@@ -31,40 +31,29 @@ class SentinelPlatform(AbstractPlatform):
 
         self.logger = ColorLogger(__name__, **logger_param)
 
-        if 'threshold_operator' not in self._parameters:
-            raise Exception('SentinelPlatform: "threshold_operator" parameter is required.')
-        if 'threshold_value' not in self._parameters:
-            raise Exception('SentinelPlatform: "threshold_value" parameter is required.')
-        if 'suppress_status' not in self._parameters:
-            raise Exception('SentinelPlatform: "suppress_status" parameter is required.')
-        if 'incident_status' not in self._parameters:
-            raise Exception('SentinelPlatform: "incident_status" parameter is required.')
-        if 'grouping_reopen' not in self._parameters:
-            raise Exception('SentinelPlatform: "grouping_reopen" parameter is required.')
-        if 'grouping_status' not in self._parameters:
-            raise Exception('SentinelPlatform: "grouping_status" parameter is required.')
-        if 'grouping_period' not in self._parameters:
-            raise Exception('SentinelPlatform: "grouping_period" parameter is required.')
-        if 'grouping_method' not in self._parameters:
-            raise Exception('SentinelPlatform: "grouping_method" parameter is required.')
-        if 'suppress_period' not in self._parameters:
-            raise Exception('SentinelPlatform: "suppress_period" parameter is required.')
-        if 'query_frequency' not in self._parameters:
-            raise Exception('SentinelPlatform: "query_frequency" parameter is required.')
-        if 'query_period' not in self._parameters:
-            raise Exception('SentinelPlatform: "query_period" parameter is required.')
-        if 'subscription_id' not in self._parameters:
-            raise Exception('SentinelPlatform: "subscription_id" parameter is required.')
-        if 'resource_group' not in self._parameters:
-            raise Exception('SentinelPlatform: "resource_group" parameter is required.')
-        if 'workspace_id' not in self._parameters:
-            raise Exception('SentinelPlatform: "workspace_id" parameter is required.')
-        if 'workspace_name' not in self._parameters:
-            raise Exception('SentinelPlatform: "workspace_name" parameter is required.')
-        if 'days_ago' not in self._parameters:
-            raise Exception('SentinelPlatform: "days_ago" parameter is required.')
-        if 'timeout' not in self._parameters:
-            raise Exception('SentinelPlatform: "timeout" parameter is required.')
+        required_parameters = [
+            "threshold_operator",
+            "threshold_value",
+            "suppress_status",
+            "incident_status",
+            "grouping_reopen",
+            "grouping_status",
+            "grouping_period",
+            "grouping_method",
+            "suppress_period",
+            "query_frequency",
+            "query_period",
+            "subscription_id",
+            "resource_group",
+            "workspace_id",
+            "workspace_name",
+            "days_ago",
+            "timeout"
+        ]
+
+        for param in required_parameters:
+            if param not in self._parameters:
+                raise Exception(f'SentinelPlatform: "{param}" parameter is required.')
 
         self._workspace_id = self._parameters["workspace_id"]
         self._workspace_name = self._parameters["workspace_name"]
@@ -346,13 +335,12 @@ class SentinelPlatform(AbstractPlatform):
 
 
         alert_rule = ScheduledAlertRule(
-            #query='SecurityEvent | where EventID == "4688" and ((CommandLine contains " --adcs " and CommandLine contains " --port "))',
             query=rule_converted,
             description=rule_content['description'],
             display_name=display_name,
             severity=severity,
-            query_frequency=timedelta(hours=2),
-            query_period=timedelta(hours=2),
+            query_frequency=timedelta(hours=self._query_frequency),
+            query_period=timedelta(hours=self._query_period),
             trigger_operator=TriggerOperator(self._threshold_operator),
             trigger_threshold=self._threshold_value,
             enabled=enabled,

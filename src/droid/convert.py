@@ -26,7 +26,7 @@ class Conversion:
     def __init__(self, parameters: dict, base_config, platform_name, logger_param) -> None:
         self.logger = ColorLogger(__name__, **logger_param)
         self._parameters = parameters["pipelines"]
-        self._filters_directory = base_config.get('sigma_filters_directory', None)
+        self._filters_directory = base_config.get("sigma_filters_directory", None)
         self._platform_name = platform_name
 
     def get_pipeline_config_group(self, rule_content):
@@ -36,10 +36,10 @@ class Conversion:
         Return: a str with the pipeline config group
         """
 
-        sigma_logsource_fields = ['category', 'product', 'service']
+        sigma_logsource_fields = ["category", "product", "service"]
         rule_logsource = {}
 
-        for key, value in rule_content['logsource'].items():
+        for key, value in rule_content["logsource"].items():
             if key in sigma_logsource_fields:
                 rule_logsource[key] = value
 
@@ -53,6 +53,14 @@ class Conversion:
                 group_match = None
 
         return group_match
+
+    def ms_cloud_kusto(self) -> str | None:
+        """Function to select the right Kusto backend
+
+        Return:
+            "kusto" if one of the mscloud platforms or None
+        """
+        return "kusto" if self._platform_name in ["microsoft_sentinel", "microsoft_xdr"] else None
 
     def init_sigma_filters(self, rule_file) -> None:
         """Function to load Sigma filters
@@ -89,25 +97,26 @@ class Conversion:
         pipeline_resolver = plugins.get_pipeline_resolver()
         pipeline_config_group = self.get_pipeline_config_group(rule_content)
 
-        if not self._platform_name in backends:
-            self.logger.error(f"{self._platform_name} backend not installed.")
+        backend_name = self.ms_cloud_kusto() or self._platform_name
+        if backend_name not in backends:
+            self.logger.error(f"{backend_name} backend not installed.")
             exit(1)
 
         # Pipeline config
 
         if pipeline_config_group:
             rule_supported = True
-            pipeline_config = self._parameters[pipeline_config_group]['pipelines']
+            pipeline_config = self._parameters[pipeline_config_group]["pipelines"]
             # Format
-            if 'format' in self._parameters[pipeline_config_group]:
-                self._format = self._parameters[pipeline_config_group]['format']
+            if "format" in self._parameters[pipeline_config_group]:
+                self._format = self._parameters[pipeline_config_group]["format"]
             else:
                 self._format = "default"
         else:
             rule_supported = False
 
         if rule_supported:
-            backend_class = backends[self._platform_name]
+            backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
             if pipeline_config:
                 pipeline = pipeline_resolver.resolve(pipeline_config)
             else:
@@ -125,11 +134,11 @@ class Conversion:
 
 def load_rule(rule_file):
 
-    with open(rule_file, 'r', encoding="utf-8") as stream:
+    with open(rule_file, "r", encoding="utf-8") as stream:
         try:
             object = list(yaml.safe_load_all(stream))[0]
-            if 'fields' in object:
-                object.pop('fields')
+            if "fields" in object:
+                object.pop("fields")
                 # Here we remove the fields to avoid Sigma to arbitrary
                 # convert the rule to {{ query }} | table field1,field2
                 # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/27
@@ -145,7 +154,7 @@ def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, pla
     logger.debug("processing rule {0}".format(rule_file))
 
     rule_content = load_rule(rule_file)
-    sigma_objects[rule_content['title']] = rule_content
+    sigma_objects[rule_content["title"]] = rule_content
     error, search_warning = convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules, logger_param)
     return error, search_warning
 
@@ -170,15 +179,17 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
     if parameters.platform and (parameters.search or parameters.export or parameters.integrity):
         platform_name = parameters.platform
         target = Conversion(droid_config, base_config, platform_name, logger_param)
-        if platform_name == 'splunk':
+        if platform_name == "splunk":
             platform = SplunkPlatform(droid_config, logger_param)
-        elif 'esql' in platform_name:
+        elif "esql" in platform_name:
             platform = ElasticPlatform(droid_config, logger_param, "esql", raw=False)
-        elif 'eql' in platform_name:
+        elif "eql" in platform_name:
             platform = ElasticPlatform(droid_config, logger_param, "eql", raw=False)
-        elif 'azure' in platform_name:
+        elif "microsoft_sentinel" in platform_name:
             platform = SentinelPlatform(droid_config, logger_param)
-        elif parameters.platform == 'microsoft_defender':
+        elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr:
+            platform = SentinelPlatform(droid_config, logger_param)
+        elif "microsoft_xdr" in platform_name:
             platform = MicrosoftXDRPlatform(droid_config, logger_param)
 
     if path.is_dir():

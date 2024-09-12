@@ -17,18 +17,18 @@ def post_rule_content(rule_content):
     Return rule_content dict with post-processing
     """
 
-    if environ.get('DROID_ENV_DEV') == 'True':
-        rule_content['title'] = "[DEV]" + " " + rule_content['title']
+    if environ.get("DROID_ENV_DEV") == "True":
+        rule_content["title"] = "[DEV]" + " " + rule_content["title"]
 
     return rule_content
 
 def load_rule(rule_file):
 
-    with open(rule_file, 'r') as stream:
+    with open(rule_file, "r") as stream:
         try:
             object = list(yaml.safe_load_all(stream))[0]
-            if 'fields' in object:
-                object.pop('fields')
+            if "fields" in object:
+                object.pop("fields")
                 # Here we remove the fields to avoid Sigma to arbitrary
                 # convert the rule to {{ query }} | table field1,field2
             return object
@@ -48,7 +48,7 @@ def export_rule(
     rule_content = post_rule_content(rule_content)
 
     try:
-        if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
+        if rule_content.get("custom", {}).get("removed", False): # If rule is set as removed
             platform.remove_rule(rule_content, rule_converted, rule_file)
         else:
             platform.create_rule(rule_content, rule_converted, rule_file)
@@ -68,13 +68,13 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
 
     error = False
 
-    if parameters.platform == 'splunk':
+    if parameters.platform == "splunk":
         platform = SplunkPlatform(export_config, logger_param)
-    elif parameters.platform == 'azure':
+    elif parameters.platform == "microsoft_sentinel":
         platform = SentinelPlatform(export_config, logger_param)
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == "microsoft_xdr":
         platform = MicrosoftXDRPlatform(export_config, logger_param)
-    elif parameters.platform == 'esql' or parameters.platform == 'eql':
+    elif parameters.platform == "esql" or parameters.platform == "eql":
         platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
 
     if path.is_dir():
@@ -82,8 +82,8 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
         for rule_file in path.rglob("*.y*ml"):
             rule_content = load_rule(rule_file)
             rule_content = post_rule_content(rule_content)
-            rule_converted = rule_content['detection']
-            if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
+            rule_converted = rule_content["detection"]
+            if rule_content.get("custom", {}).get("removed", False): # If rule is set as removed
                 try:
                     platform.remove_rule(rule_content, rule_converted, rule_file)
                 except:
@@ -103,8 +103,8 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
         rule_file = path
         rule_content = load_rule(rule_file)
         rule_content = post_rule_content(rule_content)
-        rule_converted = rule_content['detection']
-        if rule_content.get('custom', {}).get('removed', False): # If rule is set as removed
+        rule_converted = rule_content["detection"]
+        if rule_content.get("custom", {}).get("removed", False): # If rule is set as removed
             try:
                 platform.remove_rule(rule_content, rule_converted, rule_file)
             except:
