@@ -21,16 +21,16 @@ from droid.color import ColorLogger
 
 def init_argparse() -> argparse.ArgumentParser:
     """Initialise the argument parsers
-    Creates an instance of `argparse.ArgumentParser` and configures it
+    Creates an instance of "argparse.ArgumentParser" and configures it
     with the DROID arguments.
 
     Returns:
-        An instance of `argparse.ArgumentParser` configured with the specified
+        An instance of "argparse.ArgumentParser" configured with the specified
         command line arguments.
     """
     parser = argparse.ArgumentParser(
-                        prog='droid',
-                        description='Detection Rules Optimization Integration Deployment',
+                        prog="droid",
+                        description="Detection Rules Optimization Integration Deployment",
                         )
     parser.add_argument("-v", "--validate", help="Validate the rules", action="store_true")
     parser.add_argument("-r", "--rules", help="Rules path", required=True)
@@ -39,10 +39,10 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-cf", "--config-file", help="DROID configuration file path")
     parser.add_argument("-d", "--debug", help="Enable debugging", action="store_true")
     parser.add_argument("-e", "--export", help="Export the rules", action="store_true")
-    parser.add_argument("-p", "--platform", help="Platform target", choices=['splunk', 'azure', 'microsoft_defender', 'esql', 'eql'])
-    parser.add_argument("-sm", "--sentinel-mde", help="Use Sentinel as backend for MDE", action="store_true")
-    parser.add_argument("-u", "--update", help="Update from source", choices=['sigmahq-core'])
-    parser.add_argument("-l", "--list", help="List items from rules", choices=['unique_fields', 'pipelines'])
+    parser.add_argument("-p", "--platform", help="Platform target", choices=["splunk", "microsoft_sentinel", "microsoft_xdr", "esql", "eql"])
+    parser.add_argument("-sx", "--sentinel-xdr", help="Use Microsoft Sentinel as a search head for Microsoft XDR", action="store_true")
+    parser.add_argument("-u", "--update", help="Update from source", choices=["sigmahq-core"])
+    parser.add_argument("-l", "--list", help="List items from rules", choices=["unique_fields", "pipelines"])
     parser.add_argument("-m", "--mssp", help="Enable MSSP mode", action="store_true")
     parser.add_argument("-mo", "--module", help="Module mode to return converted rules as a list", action="store_true")
     parser.add_argument("-j", "--json", help="Drop a JSON log file", action="store_true")
@@ -85,19 +85,19 @@ def is_raw_rule(args, base_config):
     else:
         return False
     if (
-        (args.platform in ['splunk', 'azure']) and
+        (args.platform in ["splunk", "microsoft_sentinel"]) and
         (raw_rule_folder_name in args.rules and args.platform in args.rules)
     ):
         return True
-    elif args.platform in ['esql', 'eql'] and raw_rule_folder_name in args.rules:
+    elif args.platform in ["esql", "eql"] and raw_rule_folder_name in args.rules:
         return True
-    elif args.platform in ['esql', 'eql']:
+    elif args.platform in ["esql", "eql"]:
         return False
-    elif args.platform == 'microsoft_defender' and raw_rule_folder_name in args.rules:
+    elif args.platform == "microsoft_xdr" and raw_rule_folder_name in args.rules:
         return True
     elif (
-        args.platform in ['splunk', 'azure'] or
-        (args.platform == 'microsoft_defender')
+        args.platform in ["splunk", "microsoft_sentinel"] or
+        (args.platform == "microsoft_xdr")
     ):
         return False
 
@@ -128,7 +128,7 @@ def droid_platform_config(args, config_path):
     if (args.convert or args.export) and not args.platform:
         exit("Please select one target platform. Use --help")
 
-    if args.platform == 'splunk':
+    if args.platform == "splunk":
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()
@@ -138,42 +138,43 @@ def droid_platform_config(args, config_path):
             raise Exception(f"Something unexpected happened: {e}")
 
         if args.export or args.search or args.integrity:
-            if environ.get('DROID_SPLUNK_USER'):
-                splunk_user = environ.get('DROID_SPLUNK_USER')
+            if environ.get("DROID_SPLUNK_USER"):
+                splunk_user = environ.get("DROID_SPLUNK_USER")
                 config_splunk["user"] = splunk_user
             else:
                 raise Exception("Please use: export DROID_SPLUNK_USER=<user>")
 
-            if environ.get('DROID_SPLUNK_PASSWORD'):
-                splunk_password = environ.get('DROID_SPLUNK_PASSWORD')
+            if environ.get("DROID_SPLUNK_PASSWORD"):
+                splunk_password = environ.get("DROID_SPLUNK_PASSWORD")
                 config_splunk["password"] = splunk_password
             else:
                 raise Exception("Please use: export DROID_SPLUNK_PASSWORD=<password>")
             # Replace Splunk url if env available
-            if environ.get('DROID_SPLUNK_URL'):
-                config_splunk['url'] = environ.get('DROID_SPLUNK_URL')
+            if environ.get("DROID_SPLUNK_URL"):
+                config_splunk["url"] = environ.get("DROID_SPLUNK_URL")
             # Replace Splunk webhook url if env available
-            if environ.get('DROID_SPLUNK_WEBHOOK_URL'):
-                config_splunk['action']['action.webhook.param.url'] = environ.get('DROID_SPLUNK_WEBHOOK_URL')
+            if environ.get("DROID_SPLUNK_WEBHOOK_URL"):
+                config_splunk["action"]["action.webhook.param.url"] = environ.get("DROID_SPLUNK_WEBHOOK_URL")
 
         return config_splunk
 
-    if args.platform == 'azure' or args.platform == 'microsoft_defender':
+    if args.platform == "microsoft_sentinel" or args.platform == "microsoft_xdr":
         try:
             with open(config_path) as file_obj:
                 content = file_obj.read()
                 config_data = tomllib.loads(content)
-                if args.platform == 'microsoft_defender' and args.sentinel_mde:
-                    # With Azure Sentinel as backend, loads config from azure but keep MDE pipelines
-                    config = config_data["platforms"]["azure"]
-                    config["pipelines"] = config_data["platforms"]["microsoft_defender"]["pipelines"]
+                if args.platform == "microsoft_xdr" and args.sentinel_xdr:
+
+                    # With Microsoft Sentinel as backend, loads config from microsoft_sentinel but keep Microsoft XDR pipelines
+                    config = config_data["platforms"]["microsoft_sentinel"]
+                    config["pipelines"] = config_data["platforms"]["microsoft_xdr"]["pipelines"]
                 else:
                     config = config_data["platforms"][args.platform]
                 # Replace workspace id and workspace name if env available
-                if environ.get('DROID_AZURE_WORKSPACE_ID'):
-                    config['workspace_id'] = environ.get('DROID_AZURE_WORKSPACE_ID')
-                if environ.get('DROID_AZURE_WORKSPACE_NAME'):
-                    config['workspace_name'] = environ.get('DROID_AZURE_WORKSPACE_NAME')
+                if environ.get("DROID_AZURE_WORKSPACE_ID"):
+                    config["workspace_id"] = environ.get("DROID_AZURE_WORKSPACE_ID")
+                if environ.get("DROID_AZURE_WORKSPACE_NAME"):
+                    config["workspace_name"] = environ.get("DROID_AZURE_WORKSPACE_NAME")
         except Exception:
             raise Exception("Something unexpected happened...")
 
@@ -181,47 +182,47 @@ def droid_platform_config(args, config_path):
 
             if config["search_auth"] == "app" and not "credential_file" in config:
 
-                if environ.get('DROID_AZURE_TENANT_ID'):
-                    tenant_id = environ.get('DROID_AZURE_TENANT_ID')
+                if environ.get("DROID_AZURE_TENANT_ID"):
+                    tenant_id = environ.get("DROID_AZURE_TENANT_ID")
                     config["tenant_id"] = tenant_id
                 else:
                     raise Exception("Please use: export DROID_AZURE_TENANT_ID=<tenant_id>")
 
-                if environ.get('DROID_AZURE_CLIENT_ID'):
-                    client_id = environ.get('DROID_AZURE_CLIENT_ID')
+                if environ.get("DROID_AZURE_CLIENT_ID"):
+                    client_id = environ.get("DROID_AZURE_CLIENT_ID")
                     config["client_id"] = client_id
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_ID=<client_id>")
 
-                if environ.get('DROID_AZURE_CLIENT_SECRET'):
-                    client_secret = environ.get('DROID_AZURE_CLIENT_SECRET')
+                if environ.get("DROID_AZURE_CLIENT_SECRET"):
+                    client_secret = environ.get("DROID_AZURE_CLIENT_SECRET")
                     config["client_secret"] = client_secret
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
 
             elif config["export_auth"] == "app" and args.export and not "credential_file" in config:
 
-                if environ.get('DROID_AZURE_TENANT_ID'):
-                    tenant_id = environ.get('DROID_AZURE_TENANT_ID')
+                if environ.get("DROID_AZURE_TENANT_ID"):
+                    tenant_id = environ.get("DROID_AZURE_TENANT_ID")
                     config["tenant_id"] = tenant_id
                 else:
                     raise Exception("Please use: export DROID_AZURE_TENANT_ID=<tenant_id>")
 
-                if environ.get('DROID_AZURE_CLIENT_ID'):
-                    client_id = environ.get('DROID_AZURE_CLIENT_ID')
+                if environ.get("DROID_AZURE_CLIENT_ID"):
+                    client_id = environ.get("DROID_AZURE_CLIENT_ID")
                     config["client_id"] = client_id
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_ID=<client_id>")
 
-                if environ.get('DROID_AZURE_CLIENT_SECRET'):
-                    client_secret = environ.get('DROID_AZURE_CLIENT_SECRET')
+                if environ.get("DROID_AZURE_CLIENT_SECRET"):
+                    client_secret = environ.get("DROID_AZURE_CLIENT_SECRET")
                     config["client_secret"] = client_secret
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
 
         return config
 
-    if args.platform in ['esql', 'eql']:
+    if args.platform in ["esql", "eql"]:
 
         try:
             with open(config_path) as file_obj:
@@ -233,13 +234,13 @@ def droid_platform_config(args, config_path):
 
         if config_elastic["auth_method"] == "basic":
             if args.export or args.search or args.integrity:
-                if environ.get('DROID_ELASTIC_USERNAME'):
-                    username = environ.get('DROID_ELASTIC_USERNAME')
+                if environ.get("DROID_ELASTIC_USERNAME"):
+                    username = environ.get("DROID_ELASTIC_USERNAME")
                     config_elastic["username"] = username
                 else:
                     raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
-                if environ.get('DROID_ELASTIC_PASSWORD'):
-                    password = environ.get('DROID_ELASTIC_PASSWORD')
+                if environ.get("DROID_ELASTIC_PASSWORD"):
+                    password = environ.get("DROID_ELASTIC_PASSWORD")
                     config_elastic["password"] = password
                 else:
                     raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
@@ -356,36 +357,36 @@ def main(argv=None) -> None:
 
         base_config = droid_base_config(args, config_path)
 
-        if args.platform == 'splunk':
+        if args.platform == "splunk":
             if is_raw_rule(args, base_config):
                 logger.info("Splunk raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
-        elif args.platform == 'azure':
+        elif args.platform == "microsoft_sentinel":
             if is_raw_rule(args, base_config):
-                logger.info("Azure Sentinel raw rule selected")
+                logger.info("Microsoft Sentinel raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
-        elif args.platform == 'microsoft_defender' and args.sentinel_mde:
-            if is_raw_rule(args, base_config):
-                logger.info("Microsoft Defender for Endpoint raw rule selected")
-                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
-            else:
-                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
-
-        elif args.platform == "microsoft_defender":
+        elif args.platform == "microsoft_xdr" and args.sentinel_xdr:
             if is_raw_rule(args, base_config):
                 logger.info("Microsoft XDR raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
             else:
                 export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
 
-        elif args.platform == 'esql' or args.platform == 'eql':
-            args.platform == 'elastic'
+        elif args.platform == "microsoft_xdr":
+            if is_raw_rule(args, base_config):
+                logger.info("Microsoft XDR raw rule selected")
+                export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
+            else:
+                export_error = convert_rules(parameters, droid_platform_config(args, config_path), base_config, logger_param)
+
+        elif args.platform == "esql" or args.platform == "eql":
+            args.platform == "elastic"
             if is_raw_rule(args, base_config):
                 logger.info("Elastic Security raw rule selected")
                 export_error = export_rule_raw(parameters, droid_platform_config(args, config_path), logger_param)
@@ -405,7 +406,7 @@ def main(argv=None) -> None:
 
         logger.info(f"Update mode was selected for source {args.update} - source selected: {args.rules}")
 
-        if parameters.update == 'sigmahq-core':
+        if parameters.update == "sigmahq-core":
             update_sigmahq_core(parameters)
 
     elif args.list:

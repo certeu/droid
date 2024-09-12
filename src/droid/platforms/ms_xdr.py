@@ -12,7 +12,7 @@ from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
-
+from os import environ
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
@@ -56,9 +56,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
+        elif "default" in (
+            self._parameters["search_auth"] or self._parameters["export_auth"]
+        ):
+            pass
         else:
-            # Default auth
-            self._tenant_id = self._parameters["tenant_id"]
+            raise Exception(
+                'MicrosoftXDRPlatform: "search_auth" and "export_auth" parameters must be one of "default" or "app" or "credential_file".'
+            )
 
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token = self.acquire_token()
@@ -170,7 +175,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
     def acquire_token(self):
         # MSAL configuration
-        authority = f"https://login.microsoftonline.com/{self._tenant_id}"
         scope = ["https://graph.microsoft.com/.default"]
 
         if self._parameters["search_auth"] == "default":
@@ -182,6 +186,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
             return token
         else:
+            authority = f"https://login.microsoftonline.com/{self._tenant_id}"
             # Create a confidential client application
             app = ConfidentialClientApplication(
                 self._client_id,

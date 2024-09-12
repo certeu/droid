@@ -13,7 +13,7 @@ from droid.export import post_rule_content
 
 def load_rule(rule_file):
 
-    with open(rule_file, 'r') as stream:
+    with open(rule_file, "r") as stream:
         try:
             object = list(yaml.safe_load_all(stream))[0]
             return object
@@ -44,8 +44,8 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
         return error
 
     result = {
-        "description": saved_search['description'],
-        "search": saved_search['search']
+        "description": saved_search["description"],
+        "search": saved_search["search"]
     }
 
     rule_content["detection"] = rule_converted
@@ -62,9 +62,9 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
             error = True
 
     # Check if disabled
-    is_disabled = rule_content.get('custom', {}).get('disabled')
+    is_disabled = rule_content.get("custom", {}).get("disabled")
 
-    if saved_search['disabled'] == "0":
+    if saved_search["disabled"] == "0":
         is_enabled = True
     else:
         is_enabled = False
@@ -105,9 +105,9 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
         return error
 
     result = {
-        "name": saved_search.name,
-        "description": saved_search.description,
-        "query": saved_search.query
+        "name": saved_search["name"],
+        "description": saved_search["description"],
+        "query": saved_search["query"]
     }
 
     rule_content["detection"] = rule_converted
@@ -124,7 +124,7 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
             error = True
 
     # Check if disabled
-    is_disabled = rule_content.get('custom', {}).get('disabled')
+    is_disabled = rule_content.get("custom", {}).get("disabled")
 
     if is_disabled and not saved_search.enabled:
         logger.info("The rule is disabled as expected")
@@ -157,7 +157,7 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         return error
 
     result = {
-        "description": saved_search['detectionAction']['alertTemplate']['description'],
+        "description": saved_search["detectionAction"]["alertTemplate"]["description"],
         "query": saved_search["queryCondition"]["queryText"]
     }
 
@@ -180,7 +180,7 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
 
 
     # Check if disabled
-    is_disabled = rule_content.get('custom', {}).get('disabled')
+    is_disabled = rule_content.get("custom", {}).get("disabled")
 
     if is_disabled and not saved_search["isEnabled"]:
         logger.info("The rule is disabled as expected")
@@ -212,7 +212,7 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
         return error
 
     if "metadata _id, _index, _version" not in rule_converted.lower() and "metadata _id, _index, _version" in saved_search["query"].lower():
-        saved_search["query"] = saved_search["query"].replace('  METADATA _id, _index, _version', '')
+        saved_search["query"] = saved_search["query"].replace("  METADATA _id, _index, _version", "")
 
     result = {
         "name": saved_search["name"],
@@ -266,16 +266,16 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
 
     rule_content = post_rule_content(rule_content)
 
-    if parameters.platform == 'splunk':
+    if parameters.platform == "splunk":
         error = integrity_rule_splunk(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
     elif parameters.platform in ["esql", "eql"]:
         error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif parameters.platform == 'microsoft_defender': # TODO: Add Integrity check for Microsoft 365 Defender
+    elif parameters.platform == "microsoft_xdr":
         error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
-    elif 'azure' in parameters.platform:
+    elif "microsoft_sentinel" in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
 
@@ -285,20 +285,20 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
     logger = ColorLogger(__name__, **logger_param)
     path = Path(parameters.rules)
 
-    if parameters.platform == 'splunk':
+    if parameters.platform == "splunk":
         platform = SplunkPlatform(export_config, logger_param)
-    elif parameters.platform == 'azure':
+    elif parameters.platform == "microsoft_sentinel":
         platform = SentinelPlatform(export_config, logger_param)
-    elif parameters.platform == 'microsoft_defender':
+    elif parameters.platform == "microsoft_xdr":
         platform = MicrosoftXDRPlatform(export_config, logger_param)
-    elif parameters.platform == 'esql' or parameters.platform == 'eql':
+    elif parameters.platform == "esql" or parameters.platform == "eql":
         platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
 
     if path.is_dir():
         error_i = False
         for rule_file in path.rglob("*.y*ml"):
             rule_content = load_rule(rule_file)
-            rule_converted = rule_content['detection']
+            rule_converted = rule_content["detection"]
             error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error)
             if error:
                 error_i = True
@@ -309,7 +309,7 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
     elif path.is_file():
         rule_file = path
         rule_content = load_rule(rule_file)
-        rule_converted = rule_content['detection']
+        rule_converted = rule_content["detection"]
         error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error)
     else:
         print(f"The path {path} is neither a directory nor a file.")
