@@ -12,7 +12,6 @@ from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
-from os import environ
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
