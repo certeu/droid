@@ -299,7 +299,7 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
         for rule_file in path.rglob("*.y*ml"):
             rule_content = load_rule(rule_file)
             rule_converted = rule_content["detection"]
-            error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error)
+            error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param)
             if error:
                 error_i = True
         if error_i:
