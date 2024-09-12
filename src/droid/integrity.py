@@ -105,9 +105,9 @@ def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlat
         return error
 
     result = {
-        "name": saved_search["name"],
-        "description": saved_search["description"],
-        "query": saved_search["query"]
+        "name": saved_search.name,
+        "description": saved_search.description,
+        "query": saved_search.query
     }
 
     rule_content["detection"] = rule_converted
@@ -310,7 +310,7 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
         rule_file = path
         rule_content = load_rule(rule_file)
         rule_converted = rule_content["detection"]
-        error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error)
+        error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param)
     else:
         print(f"The path {path} is neither a directory nor a file.")
 
