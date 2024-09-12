@@ -56,8 +56,6 @@ class Conversion:
 
     def ms_cloud_kusto(self) -> str | None:
         """Function to select the right Kusto backend
-        Args:
-            filter_path
 
         Return:
             "kusto" if one of the mscloud platforms or None
