@@ -445,10 +445,7 @@ class SentinelPlatform(AbstractPlatform):
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
 
-                    print(f"Group: {group}")
-                    print(f"Workspace Name: {workspace_name}")
-                    print(f"Resource Group Name: {resource_group_name}")
-                    print(f"Subscription ID: {subscription_id}")
+                    self.logger.debug(f"Exporting to {workspace_name}")
 
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
