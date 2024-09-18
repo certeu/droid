@@ -70,8 +70,10 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
 
     if parameters.platform == "splunk":
         platform = SplunkPlatform(export_config, logger_param)
+    elif parameters.platform == "microsoft_sentinel" and parameters.mssp:
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
     elif parameters.platform == "microsoft_sentinel":
-        platform = SentinelPlatform(export_config, logger_param)
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
     elif parameters.platform == "microsoft_xdr":
         platform = MicrosoftXDRPlatform(export_config, logger_param)
     elif parameters.platform == "esql" or parameters.platform == "eql":
@@ -107,14 +109,14 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
         if rule_content.get("custom", {}).get("removed", False): # If rule is set as removed
             try:
                 platform.remove_rule(rule_content, rule_converted, rule_file)
-            except:
-                logger.error(f"Error in removing search for rule {rule_file}")
+            except Exception as e:
+                logger.error(f"Error in removing search for rule {rule_file} - error: {e}")
                 error = True
         else:
             try:
                 platform.create_rule(rule_content, rule_converted, rule_file)
-            except:
-                logger.error(f"Error in creating search for rule {rule_file}")
+            except Exception as e:
+                logger.error(f"Error in creating search for rule {rule_file} - error: {e}")
                 error = True
         if error:
             return error

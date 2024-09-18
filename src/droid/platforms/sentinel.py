@@ -23,11 +23,12 @@ from droid.color import ColorLogger
 
 class SentinelPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, logger_param: dict) -> None:
+    def __init__(self, parameters: dict, logger_param: dict, export_mssp: bool=False) -> None:
 
         super().__init__(name="Sentinel")
 
         self._parameters = parameters
+        self._export_mssp = export_mssp
 
         self.logger = ColorLogger(__name__, **logger_param)
 
@@ -78,9 +79,67 @@ class SentinelPlatform(AbstractPlatform):
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
 
+        # Optional fields
 
         if 'alert_prefix' in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
+
+        if 'export_list_mssp' in self._parameters:
+            self._export_list_mssp = self._parameters["export_list_mssp"]
+
+    def mitre_tactics(self, rule_content) -> list:
+        """
+        Extracts and returns a list of MITRE ATT&CK tactics from the provided rule content.
+
+        Returns:
+            A list of of MITRE ATT&CK tactics or None
+        """
+        tactic_mapping = {
+            "reconnaissance": "Reconnaissance",
+            "resource-development": "ResourceDevelopment",
+            "initial-access": "InitialAccess",
+            "execution": "Execution",
+            "persistence": "Persistence",
+            "privilege-escalation": "PrivilegeEscalation",
+            "defense-evasion": "DefenseEvasion",
+            "credential-access": "CredentialAccess",
+            "discovery": "Discovery",
+            "lateral-movement": "LateralMovement",
+            "collection": "Collection",
+            "command-and-control": "CommandAndControl",
+            "exfiltration": "Exfiltration",
+            "impact": "Impact",
+            "pre-attack": "PreAttack",
+            "impair-process-control": "ImpairProcessControl",
+            "inhibit-response-function": "InhibitResponseFunction",
+        }
+
+        tactics_found = []
+
+        for tag in rule_content.get("tags", []):
+            tactic = tag.replace("attack.", "").lower().strip()
+            if tactic in tactic_mapping:
+                tactics_found.append(tactic_mapping[tactic])
+
+        return tactics_found or None
+
+
+    def mitre_techniques(self, rule_content) -> list:
+        """
+        Extracts and returns a list of unique MITRE ATT&CK techniques (excluding sub-techniques) from the provided rule content.
+
+        Returns:
+            A list of of MITRE ATT&CK techniques or None
+        """
+        attack_regex = re.compile(r"attack\.([tT][0-9]{4})(\.[0-9]{3})?")
+
+        mitre_techniques = {
+            attack_regex.match(tag).group(1).upper()
+            for tag in rule_content.get("tags", [])
+            if tag.lower().startswith("attack.") and attack_regex.match(tag)
+        }
+
+        return list(mitre_techniques) if mitre_techniques else None
 
     def get_credentials(self):
         """Get credentials
@@ -94,8 +153,14 @@ class SentinelPlatform(AbstractPlatform):
 
         return credential
 
-    def get_workspaces(self, credential):
-        graph_query = self._parameters["graph_query"]
+    def get_workspaces(self, credential, export_mode=False):
+
+        if export_mode:
+            graph_query = 'resources | where name contains "SecurityInsights" | extend workspaceId = tostring(properties.workspaceResourceId) | project name, resourceGroup, subscriptionId'
+            graph_key = "resourceGroup"
+        else:
+            graph_query = 'resources | where name contains "SecurityInsights" | extend workspaceId = tostring(properties.workspaceResourceId) | project name, workspaceId'
+            graph_key = "workspaceId"
 
         subsClient = SubscriptionClient(credential)
         subsRaw = []
@@ -116,12 +181,19 @@ class SentinelPlatform(AbstractPlatform):
 
         for entry in results.data:
             name = entry.get('name')
-            workspace_id = entry.get('workspaceId')
+            graph_value = entry.get(graph_key)
             workspace_name = name.split('(')[1].split(')')[0]
-            entry_dict = {
-                "customer": workspace_name,
-                "workspace_id": workspace_id
-            }
+            if export_mode:
+                entry_dict = {
+                    "customer": workspace_name,
+                    graph_key: graph_value,
+                    "subscription_id": entry.get("subscriptionId")
+                }
+            else:
+                entry_dict = {
+                    "customer": workspace_name,
+                    graph_key: graph_value
+                }
 
             workspace_list.append(entry_dict)
 
@@ -146,6 +218,30 @@ class SentinelPlatform(AbstractPlatform):
             result += len(table.rows)
 
         return customer, result
+
+    def mssp_run_sentinel_export(
+            self, client, rule_content,
+            rule_converted, customer_info, alert_rule
+            ) -> None:
+        customer = customer_info['customer']
+        resource_group_name = customer_info['resourceGroup']
+
+        try:
+            client.alert_rules.create_or_update(
+                        resource_group_name=resource_group_name,
+                        workspace_name=customer,
+                        rule_id=rule_content['id'],
+                        alert_rule=alert_rule
+            )
+        except Exception as e:
+            self.logger.error(f"(MSSP) Could not export the rule. Error: {e}", extra={
+                "rule_converted": rule_converted,
+                "customer": customer,
+                "resource_group_name": resource_group_name,
+                "rule_content": rule_content,
+                "error": e
+            })
+            raise
 
     def run_sentinel_search(self, rule_converted, rule_file, mssp_mode):
 
@@ -207,7 +303,7 @@ class SentinelPlatform(AbstractPlatform):
 
                 total_result = 0
 
-                for table in results.tables: # results.tables contains the ... results :eyes:
+                for table in results.tables:
                     total_result += len(table.rows)
 
                 return total_result
@@ -291,18 +387,6 @@ class SentinelPlatform(AbstractPlatform):
         else:
             severity = rule_content['level']
 
-        # Handling the tactic
-        if rule_content['tags']:
-            attack_tags = next((tag for tag in rule_content.get('tags', []) if tag.startswith('attack.t')), None)
-            t_value = re.match(r'attack\.([tT][0-9]+)\.*.*', attack_tags)
-            if t_value:
-                technique_id = t_value.group(1).upper()
-                tactics = None # Temporary until sentinel allows to push technique IDs
-            else:
-                tactics = None
-        else:
-            tactics = None
-
         if self._suppress_status == True:
             suppression_enabled = True
             suppression_duration = timedelta(hours=self._suppress_period)
@@ -333,7 +417,6 @@ class SentinelPlatform(AbstractPlatform):
             else:
                 grouping_config = None
 
-
         alert_rule = ScheduledAlertRule(
             query=rule_converted,
             description=rule_content['description'],
@@ -348,23 +431,53 @@ class SentinelPlatform(AbstractPlatform):
             suppression_enabled=suppression_enabled,
             event_grouping_settings=EventGroupingSettings(aggregation_kind="SingleAlert"),
             incident_configuration=IncidentConfiguration(create_incident=create_incident, grouping_configuration=grouping_config),
-            tactics=tactics
+            tactics=self.mitre_tactics(rule_content),
+            techniques=self.mitre_techniques(rule_content)
         )
 
         credential = self.get_credentials()
 
-        client = SecurityInsights(credential, self._subscription_id)
+        if self._export_mssp:
+            if self._export_list_mssp:
+                self.logger.info("Exporting to restricted customers")
+                for group, info in self._export_list_mssp.items():
+                    workspace_name = info['workspace_name']
+                    resource_group_name = info['resource_group_name']
+                    subscription_id = info['subscription_id']
 
-        try:
-            client.alert_rules.create_or_update(
-                resource_group_name=self._resource_group,
-                workspace_name=self._workspace_name,
-                rule_id=rule_content['id'],
-                alert_rule=alert_rule
-            )
-            self.logger.info(f"Successfully exported the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
-        except Exception as e:
-            self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
-            raise
+                    print(f"Group: {group}")
+                    print(f"Workspace Name: {workspace_name}")
+                    print(f"Resource Group Name: {resource_group_name}")
+                    print(f"Subscription ID: {subscription_id}")
 
+                    # Create a new SecurityInsights client for the target subscription
+                    client = SecurityInsights(credential, subscription_id)
+
+                    try:
+                        client.alert_rules.create_or_update(
+                            resource_group_name=resource_group_name,
+                            workspace_name=workspace_name,
+                            rule_id=rule_content['id'],
+                            alert_rule=alert_rule
+                        )
+                        self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
+                        raise
+            else:
+                client_workspaces = self.get_workspaces(credential, export_mode=True)
+                # TODO: Export to all customers
+        else:
+            client = SecurityInsights(credential, self._subscription_id)
+            try:
+                client.alert_rules.create_or_update(
+                    resource_group_name=self._resource_group,
+                    workspace_name=self._workspace_name,
+                    rule_id=rule_content['id'],
+                    alert_rule=alert_rule
+                )
+                self.logger.info(f"Successfully exported the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+            except Exception as e:
+                self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
+                raise
 
