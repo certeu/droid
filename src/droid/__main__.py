@@ -180,6 +180,20 @@ def droid_platform_config(args, config_path):
 
         if args.export or args.search or args.integrity:
 
+            auth_methods = ["default", "app"]
+
+            if environ.get("DROID_MS_CLOUD_SEARCH_AUTH"):
+                config["search_auth"] = environ.get("DROID_MS_CLOUD_SEARCH_AUTH")
+
+            if environ.get("DROID_MS_CLOUD_EXPORT_AUTH"):
+                config["export_auth"] = environ.get("DROID_MS_CLOUD_EXPORT_AUTH")
+
+            if "search_auth" in config and config["search_auth"] not in auth_methods:
+                raise ValueError(f"Invalid search_auth: {config['search_auth']}")
+
+            if "export_auth" in config and config["export_auth"] not in auth_methods:
+                raise ValueError(f"Invalid export_auth: {config['export_auth']}")
+
             if config["search_auth"] == "app" and not "credential_file" in config:
 
                 if environ.get("DROID_AZURE_TENANT_ID"):
