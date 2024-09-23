@@ -182,11 +182,11 @@ def droid_platform_config(args, config_path):
 
             auth_methods = ["default", "app"]
 
-            if environ.get("DROID_MS_CLOUD_SEARCH_AUTH"):
-                config["search_auth"] = environ.get("DROID_MS_CLOUD_SEARCH_AUTH")
+            if environ.get("DROID_AZURE_SEARCH_AUTH"):
+                config["search_auth"] = environ.get("DROID_AZURE_SEARCH_AUTH")
 
-            if environ.get("DROID_MS_CLOUD_EXPORT_AUTH"):
-                config["export_auth"] = environ.get("DROID_MS_CLOUD_EXPORT_AUTH")
+            if environ.get("DROID_AZURE_EXPORT_AUTH"):
+                config["export_auth"] = environ.get("DROID_AZURE_EXPORT_AUTH")
 
             if "search_auth" in config and config["search_auth"] not in auth_methods:
                 raise ValueError(f"Invalid search_auth: {config['search_auth']}")
