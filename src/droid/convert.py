@@ -185,10 +185,10 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
             platform = ElasticPlatform(droid_config, logger_param, "esql", raw=False)
         elif "eql" in platform_name:
             platform = ElasticPlatform(droid_config, logger_param, "eql", raw=False)
-        elif "microsoft_sentinel" in platform_name:
-            platform = SentinelPlatform(droid_config, logger_param)
         elif "microsoft_sentinel" in platform_name and parameters.mssp:
             platform = SentinelPlatform(droid_config, logger_param, export_mssp=True)
+        elif "microsoft_sentinel" in platform_name:
+            platform = SentinelPlatform(droid_config, logger_param, export_mssp=False)
         elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr:
             platform = SentinelPlatform(droid_config, logger_param)
         elif "microsoft_xdr" in platform_name:

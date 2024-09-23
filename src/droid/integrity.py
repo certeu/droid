@@ -83,19 +83,62 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
     if error:
         return error
 
-def integrity_rule_sentinel(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error):
+def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error):
 
     try:
-        saved_search: dict = platform.get_rule(rule_content, rule_file)
-    # Mapping rule_content with a MS Sentinel saved search properties
-        mapping = {
-            "id": "name",
-            "detection": "query",
-            "description": "description"
-        }
+        export_list = platform.get_integrity_export_mssp()
+    except Exception as e:
+        logger.error(f"Couldn't get the export list for the designated customers - error {e}")
+        return error
+
+    logger.info("Integrity check for designated customers")
+
+    error_occured = False
+
+    for group, info in export_list.items():
+
+        tenant_id = info['tenant_id']
+        subscription_id = info['subscription_id']
+        resource_group_name = info['resource_group_name']
+        workspace_name = info['workspace_name']
+
+        logger.debug(f"Processing rule on {workspace_name} from group id {group}")
+        try:
+            saved_search: dict = platform.get_rule_mssp(
+                rule_content, rule_file, tenant_id,
+                subscription_id, resource_group_name,
+                workspace_name
+            )
+        except Exception as e:
+            logger.error(f"Couldn't check the integrity for the rule {rule_file} on workspace {workspace_name} from {group} - error {e}")
+            return error
+
+        error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
+
+        if error:
+            error_occured = True
+
+    if error_occured:
+        return error
+
+def integrity_rule_sentinel(
+            rule_converted, rule_content, platform: SentinelPlatform,
+            rule_file, parameters, logger,
+            error, saved_search=None
+            ):
+
+    try:
+        if not saved_search:
+            saved_search: dict = platform.get_rule(rule_content, rule_file)
     except Exception as e:
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
         return error
+
+    mapping = {
+        "id": "name",
+        "detection": "query",
+        "description": "description"
+    }
 
     if saved_search:
         logger.info(f"Successfully retrieved the rule {rule_file}")
@@ -223,7 +266,6 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
     rule_content["detection"] = rule_converted
 
     mapping = {
-        #"id": "name", # Not sure why this is here?
         "detection": "query",
         "description": "description"
     }
@@ -275,6 +317,9 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
     elif parameters.platform == "microsoft_xdr":
         error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
+    elif "microsoft_sentinel" in parameters.platform and parameters.mssp:
+        error = integrity_rule_sentinel_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
+        return error
     elif "microsoft_sentinel" in parameters.platform:
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
@@ -287,8 +332,10 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
 
     if parameters.platform == "splunk":
         platform = SplunkPlatform(export_config, logger_param)
+    elif parameters.platform == "microsoft_sentinel" and parameters.mssp:
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
     elif parameters.platform == "microsoft_sentinel":
-        platform = SentinelPlatform(export_config, logger_param)
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
     elif parameters.platform == "microsoft_xdr":
         platform = MicrosoftXDRPlatform(export_config, logger_param)
     elif parameters.platform == "esql" or parameters.platform == "eql":

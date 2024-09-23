@@ -192,12 +192,22 @@ class SentinelPlatform(AbstractPlatform):
             else:
                 entry_dict = {
                     "customer": workspace_name,
-                    graph_key: graph_value
+                    "workspace_id": graph_value
                 }
 
             workspace_list.append(entry_dict)
 
         return workspace_list
+
+    def get_integrity_export_mssp(self) -> list:
+
+        if self._export_list_mssp:
+            self.logger.info("Integrity check for designated customers")
+            return self._export_list_mssp
+        else:
+            self.logger.error("No export_list_mssp found")
+            raise
+            # TODO: Integrity check to all customers
 
 
     def mssp_run_sentinel_search(self,
@@ -314,9 +324,40 @@ class SentinelPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(f"Rule {rule_file} error: {e}")
 
+    def get_rule_mssp(self, rule_content, rule_file,
+                      tenant_id, subscription_id, resource_group_name,
+                      workspace_name):
+        """Retrieve a scheduled alert rule in Sentinel in MSSP mode
+        """
+
+        self._tenant_id = tenant_id
+        credential = self.get_credentials()
+
+        client = SecurityInsights(credential, subscription_id)
+
+        try:
+            rule = client.alert_rules.get(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_content['id']
+            )
+            self.logger.info(f"Successfully retrieved the rule {rule_file} for {workspace_name}")
+
+            if rule:
+                return rule
+            else:
+                return None
+
+        except ResourceNotFoundError:
+            self.logger.error(f"Rule not found {rule_file} in {workspace_name}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Could not retrieve the rule {rule_file} in {workspace_name}")
+            raise
+
     def get_rule(self, rule_content, rule_file):
         """Retrieve a scheduled alert rule in Sentinel
-        Remove a scheduled alert rule in Sentinel
         """
         credential = self.get_credentials()
 
@@ -435,17 +476,19 @@ class SentinelPlatform(AbstractPlatform):
             techniques=self.mitre_techniques(rule_content)
         )
 
-        credential = self.get_credentials()
-
         if self._export_mssp:
             if self._export_list_mssp:
-                self.logger.info("Exporting to restricted customers")
+                self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
+
                     workspace_name = info['workspace_name']
+                    self._tenant_id = info['tenant_id']
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
 
-                    self.logger.debug(f"Exporting to {workspace_name}")
+                    self.logger.debug(f"Exporting to {workspace_name} from group id {group}")
+
+                    credential = self.get_credentials()
 
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
@@ -465,6 +508,7 @@ class SentinelPlatform(AbstractPlatform):
                 client_workspaces = self.get_workspaces(credential, export_mode=True)
                 # TODO: Export to all customers
         else:
+            credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
             try:
                 client.alert_rules.create_or_update(

@@ -175,6 +175,11 @@ def droid_platform_config(args, config_path):
                     config["workspace_id"] = environ.get("DROID_AZURE_WORKSPACE_ID")
                 if environ.get("DROID_AZURE_WORKSPACE_NAME"):
                     config["workspace_name"] = environ.get("DROID_AZURE_WORKSPACE_NAME")
+                if environ.get("DROID_AZURE_SUBSCRIPTION_ID"):
+                    config["subscription_id"] = environ.get("DROID_AZURE_SUBSCRIPTION_ID")
+                if environ.get("DROID_AZURE_RESOURCE_GROUP"):
+                    config["resource_group"] = environ.get("DROID_AZURE_RESOURCE_GROUP")
+
         except Exception:
             raise Exception("Something unexpected happened...")
 
@@ -182,11 +187,11 @@ def droid_platform_config(args, config_path):
 
             auth_methods = ["default", "app"]
 
-            if environ.get("DROID_MS_CLOUD_SEARCH_AUTH"):
-                config["search_auth"] = environ.get("DROID_MS_CLOUD_SEARCH_AUTH")
+            if environ.get("DROID_AZURE_SEARCH_AUTH"):
+                config["search_auth"] = environ.get("DROID_AZURE_SEARCH_AUTH")
 
-            if environ.get("DROID_MS_CLOUD_EXPORT_AUTH"):
-                config["export_auth"] = environ.get("DROID_MS_CLOUD_EXPORT_AUTH")
+            if environ.get("DROID_AZURE_EXPORT_AUTH"):
+                config["export_auth"] = environ.get("DROID_AZURE_EXPORT_AUTH")
 
             if "search_auth" in config and config["search_auth"] not in auth_methods:
                 raise ValueError(f"Invalid search_auth: {config['search_auth']}")
