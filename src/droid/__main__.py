@@ -175,6 +175,11 @@ def droid_platform_config(args, config_path):
                     config["workspace_id"] = environ.get("DROID_AZURE_WORKSPACE_ID")
                 if environ.get("DROID_AZURE_WORKSPACE_NAME"):
                     config["workspace_name"] = environ.get("DROID_AZURE_WORKSPACE_NAME")
+                if environ.get("DROID_AZURE_SUBSCRIPTION_ID"):
+                    config["subscription_id"] = environ.get("DROID_AZURE_SUBSCRIPTION_ID")
+                if environ.get("DROID_AZURE_RESOURCE_GROUP"):
+                    config["resource_group"] = environ.get("DROID_AZURE_RESOURCE_GROUP")
+
         except Exception:
             raise Exception("Something unexpected happened...")
 

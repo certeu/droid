@@ -508,6 +508,7 @@ class SentinelPlatform(AbstractPlatform):
                 client_workspaces = self.get_workspaces(credential, export_mode=True)
                 # TODO: Export to all customers
         else:
+            credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
             try:
                 client.alert_rules.create_or_update(
