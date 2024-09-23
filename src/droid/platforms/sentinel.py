@@ -445,7 +445,7 @@ class SentinelPlatform(AbstractPlatform):
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
 
-                    self.logger.debug(f"Exporting to {workspace_name}")
+                    self.logger.debug(f"Exporting to {workspace_name} from group id {group}")
 
                     credential = self.get_credentials()
 
