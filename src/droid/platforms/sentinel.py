@@ -192,7 +192,7 @@ class SentinelPlatform(AbstractPlatform):
             else:
                 entry_dict = {
                     "customer": workspace_name,
-                    graph_key: graph_value
+                    "workspace_id": graph_value
                 }
 
             workspace_list.append(entry_dict)
@@ -435,17 +435,19 @@ class SentinelPlatform(AbstractPlatform):
             techniques=self.mitre_techniques(rule_content)
         )
 
-        credential = self.get_credentials()
-
         if self._export_mssp:
             if self._export_list_mssp:
                 self.logger.info("Exporting to restricted customers")
                 for group, info in self._export_list_mssp.items():
+
                     workspace_name = info['workspace_name']
+                    self._tenant_id = info['tenant_id']
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
 
                     self.logger.debug(f"Exporting to {workspace_name}")
+
+                    credential = self.get_credentials()
 
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
