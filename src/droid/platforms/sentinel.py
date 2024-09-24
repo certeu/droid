@@ -199,7 +199,7 @@ class SentinelPlatform(AbstractPlatform):
 
         return workspace_list
 
-    def get_integrity_export_mssp(self) -> list:
+    def get_export_list_mssp(self) -> list:
 
         if self._export_list_mssp:
             self.logger.info("Integrity check for designated customers")
@@ -207,8 +207,6 @@ class SentinelPlatform(AbstractPlatform):
         else:
             self.logger.error("No export_list_mssp found")
             raise
-            # TODO: Integrity check to all customers
-
 
     def mssp_run_sentinel_search(self,
                                  client,
@@ -505,8 +503,8 @@ class SentinelPlatform(AbstractPlatform):
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
                         raise
             else:
-                client_workspaces = self.get_workspaces(credential, export_mode=True)
-                # TODO: Export to all customers
+                self.logger.error("Export list not found. Please provide the list of designated customers")
+                raise
         else:
             credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
