@@ -70,14 +70,20 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
 
     if parameters.platform == "splunk":
         platform = SplunkPlatform(export_config, logger_param)
+    elif parameters.platform == "esql" or parameters.platform == "eql":
+        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
     elif parameters.platform == "microsoft_sentinel" and parameters.mssp:
         platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
     elif parameters.platform == "microsoft_sentinel":
         platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
+    elif "microsoft_xdr" in parameters.platform and parameters.sentinel_xdr and parameters.mssp:
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
+    elif "microsoft_xdr" in parameters.platform and parameters.sentinel_xdr:
+        platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
+    elif parameters.platform == "microsoft_xdr" and parameters.mssp:
+        platform = MicrosoftXDRPlatform(export_config, logger_param, export_mssp=True)
     elif parameters.platform == "microsoft_xdr":
-        platform = MicrosoftXDRPlatform(export_config, logger_param)
-    elif parameters.platform == "esql" or parameters.platform == "eql":
-        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
+        platform = MicrosoftXDRPlatform(export_config, logger_param, export_mssp=False)
 
     if path.is_dir():
         error_i = False

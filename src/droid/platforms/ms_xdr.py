@@ -15,13 +15,14 @@ from azure.identity import DefaultAzureCredential
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, logger_param: dict) -> None:
+    def __init__(self, parameters: dict, logger_param: dict, export_mssp: bool=False) -> None:
 
         super().__init__(name="Microsoft XDR")
 
         self.logger = ColorLogger(__name__, **logger_param)
 
         self._parameters = parameters
+        self._export_mssp = export_mssp
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -65,7 +66,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             )
 
         self._api_base_url = "https://graph.microsoft.com/beta"
+
         self._token = self.acquire_token()
+
         self._headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
@@ -75,35 +78,30 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             self._alert_prefix = None
 
-    def mssp_run_xdr_search(
-        self, client, rule_converted, start_time, current_time, customer_info
-    ):
-        # TODO: Provide a list of tenant ids and process
-        return None
+        if 'export_list_mssp' in self._parameters:
+            self._export_list_mssp = self._parameters["export_list_mssp"]
 
-        customer = customer_info["customer"]
-        workspace_id = customer_info["workspace_id"]
+    def get_export_list_mssp(self) -> list:
 
-        results = client.query_resource(
-            workspace_id,
-            rule_converted,
-            timespan=(start_time, current_time),
-            server_timeout=self._timeout,
-        )
+        if self._export_list_mssp:
+            self.logger.info("Integrity check for designated customers")
+            return self._export_list_mssp
+        else:
+            self.logger.error("No export_list_mssp found")
+            raise
 
-        result = 0
-
-        for table in results.tables:
-            result += len(table.rows)
-
-        return customer, result
-
-    def run_xdr_search(self, rule_converted, rule_file):
+    def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
         payload = {"Query": rule_converted, "Timespan": "P1D"}
         try:
+            if tenant_id:
+                self.logger.info(f"Searching for rule {rule_file} on tenant {tenant_id}")
+            else:
+                self.logger.info(f"Searching for rule {rule_file} on tenant {self._tenant_id}")
+
             results, status_code = self._post(
-                url="/security/runHuntingQuery", payload=payload
+                url="/security/runHuntingQuery", payload=payload, tenant_id=tenant_id
             )
+
             if "error" in results:
                 self.logger.error(
                     f"Error while running the query {results['error']['message']}"
@@ -115,14 +113,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.error(f"Error while running the query {e}")
             raise
 
-    def get_rule(self, rule_id):
+    def get_rule(self, rule_id, tenant_id=None):
         """Retrieve a scheduled alert rule in Microsoft XDR
-        Remove a scheduled alert rule in Microsoft XDR
         """
         try:
             params = {"$filter": f"contains(displayName, '{rule_id}')"}
             rule, status_code = self._get(
-                url="/security/rules/detectionRules", params=params
+                url="/security/rules/detectionRules", params=params, tenant_id=tenant_id
             )
             if len(rule["value"]) > 0:
                 return rule["value"][0]
@@ -172,9 +169,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 },
             )
 
-    def acquire_token(self):
+    def acquire_token(self, tenant_id=None):
         # MSAL configuration
         scope = ["https://graph.microsoft.com/.default"]
+
+        if not tenant_id:
+            tenant_id = self._tenant_id
 
         if self._parameters["search_auth"] == "default":
             self.logger.debug("Default credential selected")
@@ -185,7 +185,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
             return token
         else:
-            authority = f"https://login.microsoftonline.com/{self._tenant_id}"
+            authority = f"https://login.microsoftonline.com/{tenant_id}"
             # Create a confidential client application
             app = ConfidentialClientApplication(
                 self._client_id,
@@ -318,26 +318,57 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 alert_rule["detectionAction"]["alertTemplate"][
                     "impactedAssets"
                 ] = impactedAssets
-        try:
-            self.push_detection_rule(
-                alert_rule=alert_rule,
-                rule_content=rule_content,
-                rule_file=rule_file,
-                rule_converted=rule_converted,
-            )
-            # Send the JSON payload to Microsoft Graph Security API
 
-        except Exception as e:
-            self.logger.error(
-                f"Could not export the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": e,
-                },
-            )
-            raise
+        if self._export_mssp:
+            if self._export_list_mssp:
+                self.logger.info("Exporting to designated customers")
+                for group, info in self._export_list_mssp.items():
+
+                    tenant_id = info['tenant_id']
+                    self.logger.debug(f"Exporting to tenant {tenant_id} from group id {group}")
+
+                    try:
+                        self.push_detection_rule(
+                            alert_rule=alert_rule,
+                            rule_content=rule_content,
+                            rule_file=rule_file,
+                            rule_converted=rule_converted,
+                            tenant_id=tenant_id
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"Could not export the rule {rule_file} to tenant {tenant_id}",
+                            extra={
+                                "rule_file": rule_file,
+                                "rule_converted": rule_converted,
+                                "rule_content": rule_content,
+                                "error": e,
+                            },
+                        )
+                        raise
+            else:
+                self.logger.error("Export list not found. Please provide the list of designated customers")
+                raise
+        else:
+            try:
+                self.push_detection_rule(
+                    alert_rule=alert_rule,
+                    rule_content=rule_content,
+                    rule_file=rule_file,
+                    rule_converted=rule_converted,
+                )
+
+            except Exception as e:
+                self.logger.error(
+                    f"Could not export the rule {rule_file}",
+                    extra={
+                        "rule_file": rule_file,
+                        "rule_converted": rule_converted,
+                        "rule_content": rule_content,
+                        "error": e,
+                    },
+                )
+                raise
 
     def check_rule_changes(self, existing_rule, new_rule):
         try:
@@ -390,7 +421,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             return False
 
     def push_detection_rule(
-        self, alert_rule=None, rule_content=None, rule_file=None, rule_converted=None
+        self, alert_rule=None, rule_content=None, rule_file=None,
+        rule_converted=None, tenant_id=None
     ):
         existing_rule = self.get_rule(rule_content["id"])
         if existing_rule:
@@ -399,10 +431,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 return True
             else:
                 api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
-                response, status_code = self._patch(url=api_url, payload=alert_rule)
+                response, status_code = self._patch(url=api_url, payload=alert_rule, tenant_id=tenant_id)
         else:
             api_url = "/security/rules/detectionRules"
-            response, status_code = self._post(url=api_url, payload=alert_rule)
+            response, status_code = self._post(url=api_url, payload=alert_rule, tenant_id=tenant_id)
 
         if status_code == 400:
             self.logger.error(
@@ -607,57 +639,97 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise
         return impactedAssetsList
 
-    def _get(self, url=None, headers=None, params=None):
-        # Send the JSON payload to Microsoft Graph Security API
+    def _get(self, url=None, headers=None, params=None, tenant_id=None, timeout=120):
+        # Send the GET request to Microsoft Graph Security API
         api_url = self._api_base_url + url
+
+        if not tenant_id:
+            token = self._token
+        else:
+            token = self.acquire_token(tenant_id=tenant_id)
+
         headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
         if headers:
             headers.update(headers)
+
         while True:
-            response = requests.get(api_url, headers=headers, params=params)
-            if response.status_code == 429:
-                self.logger.debug("Rate limit reached, waiting 60 seconds")
-                time.sleep(60)
-            else:
-                break
+            try:
+                response = requests.get(api_url, headers=headers, params=params, timeout=timeout)
+                if response.status_code == 429:
+                    self.logger.debug("Rate limit reached, waiting 60 seconds")
+                    time.sleep(60)
+                else:
+                    break
+            except requests.exceptions.Timeout:
+                self.logger.error(f"GET request timed out after {timeout} seconds")
+                return None, 408
 
         return response.json(), response.status_code
 
-    def _post(self, url=None, payload=None, headers=None, params=None):
+    def _post(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120):
         # Send the JSON payload to Microsoft Graph Security API
         api_url = self._api_base_url + url
+
+        if not tenant_id:
+            token = self._token
+        else:
+            token = self.acquire_token(tenant_id=tenant_id)
+
         headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
         if headers:
             headers.update(headers)
+
         while True:
-            response = requests.post(api_url, headers=headers, json=payload)
-            if response.status_code == 429:
-                self.logger.debug("Rate limit reached, waiting 60 seconds")
-                time.sleep(60)
-            else:
-                break
+            try:
+                response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+                if response.status_code == 429:
+                    self.logger.debug("Rate limit reached, waiting 60 seconds")
+                    time.sleep(60)
+                else:
+                    break
+            except requests.exceptions.Timeout:
+                self.logger.error(f"Request timed out after {timeout} seconds")
+                return None, 408
+
         return response.json(), response.status_code
 
-    def _patch(self, url=None, payload=None, headers=None, params=None):
+    def _patch(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120):
         # Send the JSON payload to Microsoft Graph Security API
         api_url = self._api_base_url + url
+
+        # Use tenant_id to acquire token, if provided
+        if not tenant_id:
+            token = self._token
+        else:
+            token = self.acquire_token(tenant_id=tenant_id)
+
         headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
         if headers:
             headers.update(headers)
+
         while True:
-            response = requests.patch(api_url, headers=headers, json=payload)
-            if response.status_code == 429:
-                self.logger.debug("Rate limit reached, waiting 60 seconds")
-                time.sleep(60)
-            else:
-                break
+            try:
+                response = requests.patch(api_url, headers=headers, json=payload, timeout=timeout)
+                if response.status_code == 429:
+                    self.logger.debug("Rate limit reached, waiting 60 seconds")
+                    time.sleep(60)
+                else:
+                    break
+            except requests.exceptions.Timeout:
+                self.logger.error(f"PATCH request timed out after {timeout} seconds")
+                return None, 408  # Return a timeout error status code
+
         return response.json(), response.status_code
+
