@@ -474,13 +474,6 @@ class SentinelPlatform(AbstractPlatform):
             techniques=self.mitre_techniques(rule_content)
         )
 
-        if rule_content.get('custom', {}).get('disabled') is True:
-            alert_rule.enabled = False
-            self.logger.info(f"Successfully disabled the rule {rule_file}", extra={
-                "rule_file": rule_file, "rule_converted": rule_converted,
-                "rule_content": rule_content}
-            )
-
         if rule_content.get("custom", {}).get("query_frequency"):
             alert_rule.query_frequency = timedelta(hours=rule_content["custom"]["query_frequency"])
 
