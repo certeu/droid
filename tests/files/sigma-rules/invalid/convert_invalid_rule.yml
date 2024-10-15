@@ -5,8 +5,8 @@ description: Detects the use of process_lezgo2.pl
 references:
     - https://ref.pizza-planet.local/ref2
 author: pizza53
-date: 2022/01/24
-modified: 2023/02/14
+date: 2022-01-24
+modified: 2023-02-14
 tags:
     - attack.execution
     - attack.t1569

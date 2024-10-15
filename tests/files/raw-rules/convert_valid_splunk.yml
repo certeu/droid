@@ -4,8 +4,8 @@ status: experimental
 description: Rule to fetch the alerts from Azure (Defender for Cloud)
 references:
 author: pizza53
-date: 2022/05/05
-modified: 2022/05/05
+date: 2022-05-05
+modified: 2022-05-05
 tags:
     - attack.privilege_escalation
     - attack.t1053.002
