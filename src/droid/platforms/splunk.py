@@ -225,6 +225,7 @@ class SplunkPlatform(AbstractPlatform):
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
             suppress_config_group = get_pipeline_group_match(rule_content, self._suppress_fields_groups)
             if suppress_config_group:
+                self.logger.debug(f"Applying the suppress fields from group {suppress_config_group}")
                 alert_config['alert.suppress.fields'] = self._suppress_fields_groups[suppress_config_group]['alert.suppress.fields']
             alert_config.pop('suppress_fields_groups')
 

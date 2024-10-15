@@ -316,7 +316,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if 'query_period_groups' in self._parameters['rule_parameters']:
             query_period_group = get_pipeline_group_match(rule_content, self._query_period_groups)
             if query_period_group:
-                self.logger.debug(f"Applying the query_period value from group {query_period_group} to the configuration.")
+                self.logger.debug(f"Applying the query_period value from group {query_period_group}")
                 alert_rule["schedule"]["period"] = self.process_query_period(self._query_period_groups[query_period_group]['query_period'], rule_file)
 
         if "custom" in rule_content:
