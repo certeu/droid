@@ -10,6 +10,7 @@ import yaml
 from pprint import pprint
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
+from droid.platforms.common import get_pipeline_group_match
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 
@@ -23,6 +24,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         self._parameters = parameters
         self._export_mssp = export_mssp
+
+        if 'query_period_groups' in self._parameters['rule_parameters']:
+            self._query_period_groups = self._parameters['rule_parameters']['query_period_groups']
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -205,6 +209,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 exit()
 
+    def process_query_period(self, query_period: str, rule_file: str):
+        """Process the query period time
+        :return: a query period time
+        """
+        if query_period.upper() in [
+            "0",
+            "1H",
+            "3H",
+            "12H",
+            "24H",
+        ]:
+            return query_period.upper()
+        else:
+            self.logger.error(
+                f"Sigma Query Period must be one of '0', '1H', '3H', '12H' or '24H', used value provided in the config {self._query_period} - {rule_file}"
+            )
+            raise
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """
         Create an Custom Detection Rule in Microsoft XDR
@@ -291,21 +313,15 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
+        if 'query_period_groups' in self._parameters['rule_parameters']:
+            query_period_group = get_pipeline_group_match(rule_content, self._query_period_groups)
+            if query_period_group:
+                self.logger.debug(f"Applying the query_period value from group {query_period_group} to the configuration.")
+                alert_rule["schedule"]["period"] = self.process_query_period(self._query_period_groups[query_period_group]['query_period'], rule_file)
+
         if "custom" in rule_content:
             if "query_period" in rule_content["custom"]:
-                query_period = rule_content["custom"]["query_period"].upper()
-                if query_period in [
-                    "0",
-                    "1H",
-                    "3H",
-                    "12H",
-                    "24H",
-                ]:
-                    alert_rule["schedule"]["period"] = query_period
-                else:
-                    self.logger.error(
-                        f"Sigma Query Period must be one of '0', '1H', '3H', '12H' or '24H', used value provided in the config {self._query_period} - {rule_file}"
-                    )
+                alert_rule["schedule"]["period"] = self.process_query_period(rule_content["custom"]["query_period"], rule_file)
             if "actions" in rule_content["custom"]:
                 responseActions = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file

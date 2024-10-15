@@ -7,6 +7,7 @@ from os import environ
 from time import sleep
 from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
+from droid.platforms.common import get_pipeline_group_match
 from splunklib.binding import AuthenticationError
 
 class SplunkPlatform(AbstractPlatform):
@@ -150,32 +151,6 @@ class SplunkPlatform(AbstractPlatform):
         else:
             self.logger.info(f"Saved search for rule {rule_file} already deleted", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
 
-
-    def get_suppress_config_group(self, rule_content: dict):
-        """Retrieve the suppress config group name
-
-        Return: a str with the pipeline config group
-        """
-
-        sigma_logsource_fields = ['category', 'product', 'service']
-        rule_logsource = {}
-
-        for key, value in rule_content['logsource'].items():
-            if key in sigma_logsource_fields:
-                rule_logsource[key] = value
-
-        for key, value in self._suppress_fields_groups.items():
-            value = {k: v for k, v in value.items()  if k in sigma_logsource_fields}
-            if value == rule_logsource:
-                self.logger.info(f"Suppress config found: {key}")
-                group_match = key
-                break
-            else:
-                group_match = None
-
-        return group_match
-
-
     def get_rule(self, rule_content: dict, rule_converted: str, rule_file: str):
 
         alert_name = rule_content["title"]
@@ -248,7 +223,7 @@ class SplunkPlatform(AbstractPlatform):
                 alert_config['cron_schedule'] = custom_config["cron_schedule"]
 
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
-            suppress_config_group = self.get_suppress_config_group(rule_content)
+            suppress_config_group = get_pipeline_group_match(rule_content, self._suppress_fields_groups)
             if suppress_config_group:
                 alert_config['alert.suppress.fields'] = self._suppress_fields_groups[suppress_config_group]['alert.suppress.fields']
             alert_config.pop('suppress_fields_groups')
