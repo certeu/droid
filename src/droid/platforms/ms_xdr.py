@@ -125,12 +125,15 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             rule, status_code = self._get(
                 url="/security/rules/detectionRules", params=params, tenant_id=tenant_id
             )
-            if len(rule["value"]) > 0:
-                return rule["value"][0]
+            rule_value = rule.get("value", [])
+            if isinstance(rule_value, list) and len(rule_value) > 0:
+                time.sleep(6)
+                return rule_value[0]
             else:
+                self.logger.debug(f"Could not find the rule with id {rule_id}")
                 return None
         except Exception as e:
-            self.logger.error(f"Error while searching for rule id {rule_id}")
+            self.logger.error(f"Error while searching for rule id {rule_id} - {e}")
             raise
 
     def remove_rule(self, rule_content, rule_converted, rule_file):
@@ -493,6 +496,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "rule_content": rule_content,
                     },
                 )
+                time.sleep(6)
         else:
             print(status_code)
             pprint(response)
@@ -655,14 +659,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise
         return impactedAssetsList
 
-    def _get(self, url=None, headers=None, params=None, tenant_id=None, timeout=120):
-        # Send the GET request to Microsoft Graph Security API
+    def _get(self, url=None, headers=None, params=None, tenant_id=None,
+            timeout=120, max_retries=3, retry_delay=60):
+        """
+        Sends a GET request to Microsoft Graph Security API with error handling
+        and retries for specific cases like 429, 500+ errors.
+        """
+
         api_url = self._api_base_url + url
 
-        if not tenant_id:
-            token = self._token
-        else:
-            token = self.acquire_token(tenant_id=tenant_id)
+        token = self._token if not tenant_id else self.acquire_token(tenant_id)
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -672,28 +678,59 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if headers:
             headers.update(headers)
 
-        while True:
+        retry_count = 0
+
+        while retry_count < max_retries:
             try:
-                response = requests.get(api_url, headers=headers, params=params, timeout=timeout)
+                response = requests.get(api_url, headers=headers,
+                                        params=params, timeout=timeout)
+
+
                 if response.status_code == 429:
-                    self.logger.debug("Rate limit reached, waiting 60 seconds")
-                    time.sleep(60)
+                    self.logger.warning(
+                        f"Rate limit reached, retrying in {retry_delay} seconds "
+                        f"(attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
+                elif 500 <= response.status_code < 600:
+                    self.logger.warning(
+                        f"Server error {response.status_code}, retrying in "
+                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
                 else:
-                    break
+                    return response.json(), response.status_code
+
             except requests.exceptions.Timeout:
-                self.logger.error(f"GET request timed out after {timeout} seconds")
-                return None, 408
+                self.logger.warning(
+                    f"GET request timed out after {timeout} seconds "
+                    f"(attempt {retry_count+1}/{max_retries})"
+                )
+                retry_count += 1
+                time.sleep(retry_delay)
 
-        return response.json(), response.status_code
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"An error occurred: {str(e)}")
+                return None, 500
 
-    def _post(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120):
-        # Send the JSON payload to Microsoft Graph Security API
+        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
+        return None, 500
+
+
+    def _post(self, url=None, payload=None, headers=None, params=None,
+            tenant_id=None, timeout=120, max_retries=3, retry_delay=60):
+        """
+        Sends a POST request to Microsoft Graph Security API with error handling
+        and retries for specific cases like 429, 500+ errors.
+        """
+
         api_url = self._api_base_url + url
 
-        if not tenant_id:
-            token = self._token
-        else:
-            token = self.acquire_token(tenant_id=tenant_id)
+        token = self._token if not tenant_id else self.acquire_token(tenant_id)
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -703,29 +740,57 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if headers:
             headers.update(headers)
 
-        while True:
+        retry_count = 0
+
+        while retry_count < max_retries:
             try:
-                response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+                response = requests.post(api_url, headers=headers,
+                                        json=payload, timeout=timeout)
+
                 if response.status_code == 429:
-                    self.logger.debug("Rate limit reached, waiting 60 seconds")
-                    time.sleep(60)
+                    self.logger.warning(
+                        f"Rate limit reached, retrying in {retry_delay} seconds "
+                        f"(attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
+                elif 500 <= response.status_code < 600:
+                    self.logger.warning(
+                        f"Server error {response.status_code}, retrying in "
+                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
                 else:
-                    break
+                    return response.json(), response.status_code
+
             except requests.exceptions.Timeout:
-                self.logger.error(f"Request timed out after {timeout} seconds")
-                return None, 408
+                self.logger.warning(
+                    f"POST request timed out after {timeout} seconds "
+                    f"(attempt {retry_count+1}/{max_retries})"
+                )
+                retry_count += 1
+                time.sleep(retry_delay)
 
-        return response.json(), response.status_code
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"An error occurred: {str(e)}")
+                return None, 500
 
-    def _patch(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120):
-        # Send the JSON payload to Microsoft Graph Security API
+        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
+        return None, 500
+
+    def _patch(self, url=None, payload=None, headers=None, params=None,
+            tenant_id=None, timeout=120, max_retries=3, retry_delay=60):
+        """
+        Sends a PATCH request to Microsoft Graph Security API with error handling
+        and retries for specific cases like 429, 500+ errors.
+        """
+
         api_url = self._api_base_url + url
 
-        # Use tenant_id to acquire token, if provided
-        if not tenant_id:
-            token = self._token
-        else:
-            token = self.acquire_token(tenant_id=tenant_id)
+        token = self._token if not tenant_id else self.acquire_token(tenant_id)
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -735,17 +800,43 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if headers:
             headers.update(headers)
 
-        while True:
+        retry_count = 0
+
+        while retry_count < max_retries:
             try:
-                response = requests.patch(api_url, headers=headers, json=payload, timeout=timeout)
+                response = requests.patch(api_url, headers=headers,
+                                        json=payload, timeout=timeout)
+
                 if response.status_code == 429:
-                    self.logger.debug("Rate limit reached, waiting 60 seconds")
-                    time.sleep(60)
+                    self.logger.warning(
+                        f"Rate limit reached, retrying in {retry_delay} seconds "
+                        f"(attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
+                elif 500 <= response.status_code < 600:
+                    self.logger.warning(
+                        f"Server error {response.status_code}, retrying in "
+                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_count += 1
+
                 else:
-                    break
+                    return response.json(), response.status_code
+
             except requests.exceptions.Timeout:
-                self.logger.error(f"PATCH request timed out after {timeout} seconds")
-                return None, 408  # Return a timeout error status code
+                self.logger.warning(
+                    f"PATCH request timed out after {timeout} seconds "
+                    f"(attempt {retry_count+1}/{max_retries})"
+                )
+                retry_count += 1
+                time.sleep(retry_delay)
 
-        return response.json(), response.status_code
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"An error occurred: {str(e)}")
+                return None, 500
 
+        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
+        return None, 500
