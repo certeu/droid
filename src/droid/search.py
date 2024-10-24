@@ -82,18 +82,17 @@ def search_rule_ms_xdr_mssp(rule_converted, platform: MicrosoftXDRPlatform, rule
 
             logger.info(f"Successfully searched the rule {rule_file}")
 
-            if result > 0: # If the rule has match
+            if result > 0:  # If the rule has a match
                 logger.warning(f"{result} Matches found for {rule_file}")
                 search_warning = True
-                return error, search_warning
             else:
                 logger.info(f"No hits for {rule_file}")
-                return error, search_warning
 
         except Exception as e:
             logger.error(f"Couldn't search for the rule {rule_file} for tenant {tenant_id} - error {e}")
             error = True
-            return error, search_warning
+
+    return error, search_warning
 
 def search_rule_ms_xdr(rule_converted, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
 
