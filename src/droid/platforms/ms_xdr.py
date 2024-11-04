@@ -104,7 +104,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             results, status_code = self._post(
                 url="/security/runHuntingQuery", payload=payload, tenant_id=tenant_id
             )
-
+            time.sleep(2)
             if "error" in results:
                 self.logger.error(
                     f"Error while running the query {results['error']['message']}"
