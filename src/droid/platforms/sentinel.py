@@ -482,6 +482,7 @@ class SentinelPlatform(AbstractPlatform):
 
         if self._export_mssp:
             if self._export_list_mssp:
+                error = False
                 self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
 
@@ -507,7 +508,9 @@ class SentinelPlatform(AbstractPlatform):
                         self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
                     except Exception as e:
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
-                        raise
+                        error = True
+                if error:
+                    raise
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
                 raise

@@ -88,7 +88,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
     def get_export_list_mssp(self) -> list:
 
         if self._export_list_mssp:
-            self.logger.info("Integrity check for designated customers")
             return self._export_list_mssp
         else:
             self.logger.error("No export_list_mssp found")
@@ -105,7 +104,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             results, status_code = self._post(
                 url="/security/runHuntingQuery", payload=payload, tenant_id=tenant_id
             )
-
+            time.sleep(2)
             if "error" in results:
                 self.logger.error(
                     f"Error while running the query {results['error']['message']}"
@@ -210,7 +209,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.error(
                     f'Failed to acquire token: {result["error_description"]}'
                 )
-                exit()
+                raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
 
     def process_query_period(self, query_period: str, rule_file: str):
         """Process the query period time
@@ -340,6 +339,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         if self._export_mssp:
             if self._export_list_mssp:
+                error = False
                 self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
 
@@ -364,7 +364,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                                 "error": e,
                             },
                         )
-                        raise
+                        error = True
+                if error:
+                    raise
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
                 raise
@@ -443,7 +445,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self, alert_rule=None, rule_content=None, rule_file=None,
         rule_converted=None, tenant_id=None
     ):
-        existing_rule = self.get_rule(rule_content["id"])
+        existing_rule = self.get_rule(rule_content["id"], tenant_id=tenant_id)
         if existing_rule:
             self.logger.info("Rule already exists")
             if not self.check_rule_changes(existing_rule, alert_rule):
