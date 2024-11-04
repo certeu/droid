@@ -207,7 +207,11 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on tenant {tenant_id} from {group} - error {e}")
             return error
 
-        error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
+        if not saved_search:
+            error = True
+            logger.error(f"Rule not found {rule_file} in {group} - {tenant_id}")
+        else:
+            error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
             error_occured = True
