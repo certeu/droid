@@ -482,6 +482,7 @@ class SentinelPlatform(AbstractPlatform):
 
         if self._export_mssp:
             if self._export_list_mssp:
+                error = False
                 self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
 
