@@ -216,26 +216,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             if self._auth_cert:
                 with open(self._auth_cert, "rb") as file:
                     certificate_data = file.read()
-                if self._cert_pass:
-                    cert_pass_bytes = (
-                        self._cert_pass.encode()
-                        if isinstance(self._cert_pass, str)
-                        else self._cert_pass
-                    )
-                else:
-                    cert_pass_bytes = None
-                private_key = serialization.load_pem_private_key(
-                    certificate_data, cert_pass_bytes, backend=default_backend()
-                )
+
                 cert = x509.load_pem_x509_certificate(
                     certificate_data, default_backend()
                 )
                 fingerprint = cert.fingerprint(hashes.SHA1())
+                fingerprint = fingerprint.hex()
 
                 client_credential = {
-                    "private_key": private_key,
+                    "private_key": certificate_data,
                     "thumbprint": fingerprint,
-                    "passphrase": cert_pass_bytes,
+                    "passphrase": self._cert_pass,
                 }
             else:
                 client_credential = self._client_secret
