@@ -102,7 +102,7 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
                     platform.create_rule(rule_content, rule_converted, rule_file)
                 except:
                     if rule_content.get("custom", {}).get("ignore_export_error", False):
-                        logger.warning(f"(Ignoring) Error in creating search for rule {rule_file} - error: {e}")
+                        logger.warning(f"(Ignoring) Error in creating search for rule {rule_file}")
                     else:
                         logger.error(f"Error in creating search for rule {rule_file}")
                         error_i = True
