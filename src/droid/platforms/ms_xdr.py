@@ -216,11 +216,11 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             authority = f"https://login.microsoftonline.com/{tenant_id}"
             # Create a confidential client application
             if self._auth_cert:
-                with open(self._auth_cert, "r") as file:
+                with open(self._auth_cert, "rb") as file:
                     certificate_data = file.read()
-
+                cert_pass_bytes = self._cert_pass.encode() if isinstance(self._cert_pass, str) else self._cert_pass
                 private_key = serialization.load_pem_private_key(
-                    certificate_data, self._cert_pass, backend=default_backend()
+                    certificate_data, cert_pass_bytes, backend=default_backend()
                 )
                 cert = x509.load_pem_x509_certificate(
                     certificate_data, default_backend()
@@ -230,7 +230,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 client_credential = {
                     "private_key": private_key,
                     "thumbprint": fingerprint,
-                    "passphrase": self._cert_pass,
+                    "passphrase": cert_pass_bytes,
                 }
             else:
                 client_credential = self._client_secret
