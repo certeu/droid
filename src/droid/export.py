@@ -101,8 +101,11 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
                 try:
                     platform.create_rule(rule_content, rule_converted, rule_file)
                 except:
-                    logger.error(f"Error in creating search for rule {rule_file}")
-                    error_i = True
+                    if rule_content.get("custom", {}).get("ignore_export_error", False):
+                        logger.warning(f"(Ignoring) Error in creating search for rule {rule_file} - error: {e}")
+                    else:
+                        logger.error(f"Error in creating search for rule {rule_file}")
+                        error_i = True
         if error_i:
             error = True
             return error
@@ -122,8 +125,12 @@ def export_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
             try:
                 platform.create_rule(rule_content, rule_converted, rule_file)
             except Exception as e:
-                logger.error(f"Error in creating search for rule {rule_file} - error: {e}")
-                error = True
+                if rule_content.get("custom", {}).get("ignore_export_error", False):
+                    logger.warning(f"(Ignoring) Error in creating search for rule {rule_file} - error: {e}")
+                    error = False
+                else:
+                    logger.error(f"Error in creating search for rule {rule_file} - error: {e}")
+                    error = True
         if error:
             return error
     else:
