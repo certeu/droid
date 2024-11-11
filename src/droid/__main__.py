@@ -403,6 +403,7 @@ def main(argv=None) -> None:
 
         if export_error:
             logger.error("Error in exporting the rules")
+            exit(1)
         else:
             logger.info("Successfully exported the rules")
 

@@ -15,6 +15,7 @@ from azure.mgmt.securityinsight.models import ScheduledAlertRule
 from azure.mgmt.securityinsight.models import EventGroupingSettings
 from azure.mgmt.securityinsight.models import IncidentConfiguration
 from azure.mgmt.securityinsight.models import GroupingConfiguration
+from azure.mgmt.securityinsight.models import EntityMapping, FieldMapping
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
@@ -420,6 +421,14 @@ class SentinelPlatform(AbstractPlatform):
         else:
             enabled = True
 
+        # Handling the entities
+        entity_mappings = []
+        if rule_content.get('custom', {}).get('entity_mappings'):
+            for mapping in rule_content['custom']['entity_mappings']:
+                field_mappings = [FieldMapping(identifier=field['identifier'], column_name=field['column_name'])
+                                    for field in mapping['field_mappings']]
+                entity_mappings.append(EntityMapping(entity_type=mapping['entity_type'], field_mappings=field_mappings))
+
         # Handling the severity
         if rule_content['level'] == 'critical':
             severity = 'high'
@@ -471,6 +480,7 @@ class SentinelPlatform(AbstractPlatform):
             event_grouping_settings=EventGroupingSettings(aggregation_kind="SingleAlert"),
             incident_configuration=IncidentConfiguration(create_incident=create_incident, grouping_configuration=grouping_config),
             tactics=self.mitre_tactics(rule_content),
+            entity_mappings=entity_mappings,
             techniques=self.mitre_techniques(rule_content)
         )
 
@@ -482,6 +492,7 @@ class SentinelPlatform(AbstractPlatform):
 
         if self._export_mssp:
             if self._export_list_mssp:
+                error = False
                 self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
 
@@ -507,7 +518,9 @@ class SentinelPlatform(AbstractPlatform):
                         self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
                     except Exception as e:
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
-                        raise
+                        error = True
+                if error:
+                    raise
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
                 raise
