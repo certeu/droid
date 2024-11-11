@@ -398,17 +398,30 @@ def integrity_rule_raw(parameters: dict, export_config: dict, logger_param: dict
             rule_content = load_rule(rule_file)
             rule_converted = rule_content["detection"]
             error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param)
+
             if error:
-                error_i = True
-        if error_i:
-            error = True
-            return error
+                custom_settings = rule_content.get("custom", {})
+                if custom_settings.get("ignore_export_error", False):
+                    logger.warning(f"(Ignoring) rule not found {rule_file}")
+                elif custom_settings.get("removed", False):
+                    logger.info(f"Rule not found and intended to be removed {rule_file}")
+                else:
+                    error_i = True
+
+        return error_i
+
 
     elif path.is_file():
         rule_file = path
         rule_content = load_rule(rule_file)
         rule_converted = rule_content["detection"]
         error = integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param)
+        if error and rule_content.get("custom", {}).get("ignore_export_error", False):
+            logger.warning(f"(Ignoring) rule not found {rule_file}")
+            error = False
+        elif error and rule_content.get("custom", {}).get("removed", False):
+            logger.info(f"Rule not found and intended to be removed {rule_file}")
+            error = False
     else:
         print(f"The path {path} is neither a directory nor a file.")
 
