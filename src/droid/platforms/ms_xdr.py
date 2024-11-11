@@ -32,8 +32,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._parameters = parameters
         self._export_mssp = export_mssp
 
-        if "query_period_groups" in self._parameters["rule_parameters"]:
-            self._query_period_groups = self._parameters["rule_parameters"][
+        if "query_period_groups" in self._parameters:
+            self._query_period_groups = self._parameters[
                 "query_period_groups"
             ]
 
