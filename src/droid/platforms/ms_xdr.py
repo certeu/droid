@@ -357,7 +357,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
-        if "query_period_groups" in self._parameters["rule_parameters"]:
+        if "query_period_groups" in self._parameters:
             query_period_group = get_pipeline_group_match(
                 rule_content, self._query_period_groups
             )
