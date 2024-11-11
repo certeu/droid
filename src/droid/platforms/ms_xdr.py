@@ -33,9 +33,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._export_mssp = export_mssp
 
         if "query_period_groups" in self._parameters:
-            self._query_period_groups = self._parameters[
-                "query_period_groups"
-            ]
+            self._query_period_groups = self._parameters["query_period_groups"]
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -218,7 +216,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             if self._auth_cert:
                 with open(self._auth_cert, "rb") as file:
                     certificate_data = file.read()
-                cert_pass_bytes = self._cert_pass.encode() if isinstance(self._cert_pass, str) else self._cert_pass
+                if self._cert_pass:
+                    cert_pass_bytes = (
+                        self._cert_pass.encode()
+                        if isinstance(self._cert_pass, str)
+                        else self._cert_pass
+                    )
+                else:
+                    cert_pass_bytes = None
                 private_key = serialization.load_pem_private_key(
                     certificate_data, cert_pass_bytes, backend=default_backend()
                 )
@@ -251,7 +256,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.error(
                     f'Failed to acquire token: {result["error_description"]}'
                 )
-                raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
+                raise Exception(
+                    f"Token acquisition failed: {result.get('error', 'Unknown error')}"
+                )
 
     def process_query_period(self, query_period: str, rule_file: str):
         """Process the query period time
