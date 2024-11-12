@@ -422,12 +422,14 @@ class SentinelPlatform(AbstractPlatform):
             enabled = True
 
         # Handling the entities
-        entity_mappings = []
         if rule_content.get('custom', {}).get('entity_mappings'):
+            entity_mappings = []
             for mapping in rule_content['custom']['entity_mappings']:
                 field_mappings = [FieldMapping(identifier=field['identifier'], column_name=field['column_name'])
                                     for field in mapping['field_mappings']]
                 entity_mappings.append(EntityMapping(entity_type=mapping['entity_type'], field_mappings=field_mappings))
+        else:
+            entity_mappings = None
 
         # Handling the severity
         if rule_content['level'] == 'critical':
