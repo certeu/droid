@@ -28,8 +28,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._parameters = parameters
         self._export_mssp = export_mssp
 
-        if "query_period_groups" in self._parameters:
-            self._query_period_groups = self._parameters["query_period_groups"]
+        self._query_period_groups = self._parameters.get("rule_parameters", {}).get("query_period_groups")
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -323,7 +322,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
-        if "query_period_groups" in self._parameters:
+        if self._query_period_groups:
             query_period_group = get_pipeline_group_match(
                 rule_content, self._query_period_groups
             )
