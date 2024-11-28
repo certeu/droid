@@ -14,9 +14,12 @@ from droid.platforms.common import get_pipeline_group_match
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 
+
 class MicrosoftXDRPlatform(AbstractPlatform):
 
-    def __init__(self, parameters: dict, logger_param: dict, export_mssp: bool=False) -> None:
+    def __init__(
+        self, parameters: dict, logger_param: dict, export_mssp: bool = False
+    ) -> None:
 
         super().__init__(name="Microsoft XDR")
 
@@ -25,8 +28,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._parameters = parameters
         self._export_mssp = export_mssp
 
-        if 'query_period_groups' in self._parameters['rule_parameters']:
-            self._query_period_groups = self._parameters['rule_parameters']['query_period_groups']
+        self._query_period_groups = self._parameters.get("rule_parameters", {}).get("query_period_groups")
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -82,7 +84,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             self._alert_prefix = None
 
-        if 'export_list_mssp' in self._parameters:
+        if "export_list_mssp" in self._parameters:
             self._export_list_mssp = self._parameters["export_list_mssp"]
 
     def get_export_list_mssp(self) -> list:
@@ -97,9 +99,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         payload = {"Query": rule_converted, "Timespan": "P1D"}
         try:
             if tenant_id:
-                self.logger.info(f"Searching for rule {rule_file} on tenant {tenant_id}")
+                self.logger.info(
+                    f"Searching for rule {rule_file} on tenant {tenant_id}"
+                )
             else:
-                self.logger.info(f"Searching for rule {rule_file} on tenant {self._tenant_id}")
+                self.logger.info(
+                    f"Searching for rule {rule_file} on tenant {self._tenant_id}"
+                )
 
             results, status_code = self._post(
                 url="/security/runHuntingQuery", payload=payload, tenant_id=tenant_id
@@ -117,8 +123,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise
 
     def get_rule(self, rule_id, tenant_id=None):
-        """Retrieve a scheduled alert rule in Microsoft XDR
-        """
+        """Retrieve a scheduled alert rule in Microsoft XDR"""
         try:
             params = {"$filter": f"contains(displayName, '{rule_id}')"}
             rule, status_code = self._get(
@@ -209,7 +214,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.error(
                     f'Failed to acquire token: {result["error_description"]}'
                 )
-                raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
+                raise Exception(
+                    f"Token acquisition failed: {result.get('error', 'Unknown error')}"
+                )
 
     def process_query_period(self, query_period: str, rule_file: str):
         """Process the query period time
@@ -315,15 +322,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
-        if 'query_period_groups' in self._parameters['rule_parameters']:
-            query_period_group = get_pipeline_group_match(rule_content, self._query_period_groups)
+        if self._query_period_groups:
+            query_period_group = get_pipeline_group_match(
+                rule_content, self._query_period_groups
+            )
             if query_period_group:
-                self.logger.debug(f"Applying the query_period value from group {query_period_group}")
-                alert_rule["schedule"]["period"] = self.process_query_period(self._query_period_groups[query_period_group]['query_period'], rule_file)
+                self.logger.debug(
+                    f"Applying the query_period value from group {query_period_group}"
+                )
+                alert_rule["schedule"]["period"] = self.process_query_period(
+                    self._query_period_groups[query_period_group]["query_period"],
+                    rule_file,
+                )
 
         if "custom" in rule_content:
             if "query_period" in rule_content["custom"]:
-                alert_rule["schedule"]["period"] = self.process_query_period(rule_content["custom"]["query_period"], rule_file)
+                alert_rule["schedule"]["period"] = self.process_query_period(
+                    rule_content["custom"]["query_period"], rule_file
+                )
             if "actions" in rule_content["custom"]:
                 responseActions = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file
@@ -343,8 +359,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.info("Exporting to designated customers")
                 for group, info in self._export_list_mssp.items():
 
-                    tenant_id = info['tenant_id']
-                    self.logger.debug(f"Exporting to tenant {tenant_id} from group id {group}")
+                    tenant_id = info["tenant_id"]
+                    self.logger.debug(
+                        f"Exporting to tenant {tenant_id} from group id {group}"
+                    )
 
                     try:
                         self.push_detection_rule(
@@ -352,7 +370,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                             rule_content=rule_content,
                             rule_file=rule_file,
                             rule_converted=rule_converted,
-                            tenant_id=tenant_id
+                            tenant_id=tenant_id,
                         )
                     except Exception as e:
                         self.logger.error(
@@ -368,7 +386,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 if error:
                     raise
             else:
-                self.logger.error("Export list not found. Please provide the list of designated customers")
+                self.logger.error(
+                    "Export list not found. Please provide the list of designated customers"
+                )
                 raise
         else:
             try:
@@ -442,8 +462,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             return False
 
     def push_detection_rule(
-        self, alert_rule=None, rule_content=None, rule_file=None,
-        rule_converted=None, tenant_id=None
+        self,
+        alert_rule=None,
+        rule_content=None,
+        rule_file=None,
+        rule_converted=None,
+        tenant_id=None,
     ):
         existing_rule = self.get_rule(rule_content["id"], tenant_id=tenant_id)
         if existing_rule:
@@ -452,10 +476,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 return True
             else:
                 api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
-                response, status_code = self._patch(url=api_url, payload=alert_rule, tenant_id=tenant_id)
+                response, status_code = self._patch(
+                    url=api_url, payload=alert_rule, tenant_id=tenant_id
+                )
         else:
             api_url = "/security/rules/detectionRules"
-            response, status_code = self._post(url=api_url, payload=alert_rule, tenant_id=tenant_id)
+            response, status_code = self._post(
+                url=api_url, payload=alert_rule, tenant_id=tenant_id
+            )
 
         if status_code == 400:
             self.logger.error(
@@ -661,8 +689,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise
         return impactedAssetsList
 
-    def _get(self, url=None, headers=None, params=None, tenant_id=None,
-            timeout=120, max_retries=3, retry_delay=60):
+    def _get(
+        self,
+        url=None,
+        headers=None,
+        params=None,
+        tenant_id=None,
+        timeout=120,
+        max_retries=3,
+        retry_delay=60,
+    ):
         """
         Sends a GET request to Microsoft Graph Security API with error handling
         and retries for specific cases like 429, 500+ errors.
@@ -684,9 +720,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         while retry_count < max_retries:
             try:
-                response = requests.get(api_url, headers=headers,
-                                        params=params, timeout=timeout)
-
+                response = requests.get(
+                    api_url, headers=headers, params=params, timeout=timeout
+                )
 
                 if response.status_code == 429:
                     self.logger.warning(
@@ -722,9 +758,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self.logger.error(f"Failed to get a valid response after {max_retries} retries")
         return None, 500
 
-
-    def _post(self, url=None, payload=None, headers=None, params=None,
-            tenant_id=None, timeout=120, max_retries=3, retry_delay=60):
+    def _post(
+        self,
+        url=None,
+        payload=None,
+        headers=None,
+        params=None,
+        tenant_id=None,
+        timeout=120,
+        max_retries=3,
+        retry_delay=60,
+    ):
         """
         Sends a POST request to Microsoft Graph Security API with error handling
         and retries for specific cases like 429, 500+ errors.
@@ -746,8 +790,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         while retry_count < max_retries:
             try:
-                response = requests.post(api_url, headers=headers,
-                                        json=payload, timeout=timeout)
+                response = requests.post(
+                    api_url, headers=headers, json=payload, timeout=timeout
+                )
 
                 if response.status_code == 429:
                     self.logger.warning(
@@ -783,8 +828,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self.logger.error(f"Failed to get a valid response after {max_retries} retries")
         return None, 500
 
-    def _patch(self, url=None, payload=None, headers=None, params=None,
-            tenant_id=None, timeout=120, max_retries=3, retry_delay=60):
+    def _patch(
+        self,
+        url=None,
+        payload=None,
+        headers=None,
+        params=None,
+        tenant_id=None,
+        timeout=120,
+        max_retries=3,
+        retry_delay=60,
+    ):
         """
         Sends a PATCH request to Microsoft Graph Security API with error handling
         and retries for specific cases like 429, 500+ errors.
@@ -806,8 +860,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         while retry_count < max_retries:
             try:
-                response = requests.patch(api_url, headers=headers,
-                                        json=payload, timeout=timeout)
+                response = requests.patch(
+                    api_url, headers=headers, json=payload, timeout=timeout
+                )
 
                 if response.status_code == 429:
                     self.logger.warning(
