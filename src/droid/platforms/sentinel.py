@@ -82,11 +82,8 @@ class SentinelPlatform(AbstractPlatform):
 
         # Optional fields
 
-        if 'alert_prefix' in self._parameters:
-            self._alert_prefix = self._parameters["alert_prefix"]
-
-        if 'export_list_mssp' in self._parameters:
-            self._export_list_mssp = self._parameters["export_list_mssp"]
+        self._alert_prefix = self._parameters.get("alert_prefix", None)
+        self._export_list_mssp = self._parameters.get("export_list_mssp", None)
 
     def mitre_tactics(self, rule_content) -> list:
         """
