@@ -214,7 +214,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         """Process the query period time
         :return: a query period time
         """
-        query_period = str(query_period.upper())
+        query_period = str(query_period).upper()
         if query_period in [
             "0",
             "1H",
