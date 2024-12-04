@@ -82,11 +82,8 @@ class SentinelPlatform(AbstractPlatform):
 
         # Optional fields
 
-        if 'alert_prefix' in self._parameters:
-            self._alert_prefix = self._parameters["alert_prefix"]
-
-        if 'export_list_mssp' in self._parameters:
-            self._export_list_mssp = self._parameters["export_list_mssp"]
+        self._alert_prefix = self._parameters.get("alert_prefix", None)
+        self._export_list_mssp = self._parameters.get("export_list_mssp", None)
 
     def mitre_tactics(self, rule_content) -> list:
         """
@@ -422,12 +419,14 @@ class SentinelPlatform(AbstractPlatform):
             enabled = True
 
         # Handling the entities
-        entity_mappings = []
         if rule_content.get('custom', {}).get('entity_mappings'):
+            entity_mappings = []
             for mapping in rule_content['custom']['entity_mappings']:
                 field_mappings = [FieldMapping(identifier=field['identifier'], column_name=field['column_name'])
                                     for field in mapping['field_mappings']]
                 entity_mappings.append(EntityMapping(entity_type=mapping['entity_type'], field_mappings=field_mappings))
+        else:
+            entity_mappings = None
 
         # Handling the severity
         if rule_content['level'] == 'critical':
