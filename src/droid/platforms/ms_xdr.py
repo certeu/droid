@@ -19,7 +19,6 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.backends import default_backend
 
 
-
 class MicrosoftXDRPlatform(AbstractPlatform):
 
     def __init__(
@@ -33,11 +32,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._parameters = parameters
         self._export_mssp = export_mssp
 
-
         self._query_period_groups = self._parameters.get("rule_parameters", {}).get(
             "query_period_groups"
         )
-
 
         if "query_period" not in self._parameters:
             raise Exception(
@@ -56,7 +53,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 with open(self._parameters["credential_file"], "r") as file:
                     credentials = yaml.safe_load(file)
                 self._client_id = credentials["client_id"]
-                self._client_secret = credentials["client_secret"]
+                if not self._auth_cert:
+                    self._client_secret = credentials["client_secret"]
                 self._tenant_id = credentials["tenant_id"]
                 self._cert_pass = self._parameters.get("cert_pass", None)
             except Exception as e:
@@ -66,7 +64,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         ):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
-            self._client_secret = self._parameters["client_secret"]
+            if not self._auth_cert:
+                self._client_secret = self._parameters["client_secret"]
             self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (
             self._parameters["search_auth"] or self._parameters["export_auth"]
@@ -346,7 +345,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             }
         except Exception as e:
             self.logger.error(e)
-
 
         if self._query_period_groups:
             query_period_group = get_pipeline_group_match(
