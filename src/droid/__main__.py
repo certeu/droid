@@ -199,7 +199,8 @@ def droid_platform_config(args, config_path):
             if "export_auth" in config and config["export_auth"] not in auth_methods:
                 raise ValueError(f"Invalid export_auth: {config['export_auth']}")
 
-            if config["search_auth"] == "app" and not "credential_file" in config:
+            if (config["search_auth"] == "app" and not "credential_file" in config) \
+            or (config["export_auth"] == "app" and args.export and not "credential_file" in config):
 
                 if environ.get("DROID_AZURE_TENANT_ID"):
                     tenant_id = environ.get("DROID_AZURE_TENANT_ID")
@@ -219,25 +220,10 @@ def droid_platform_config(args, config_path):
                 else:
                     raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
 
-            elif config["export_auth"] == "app" and args.export and not "credential_file" in config:
-
-                if environ.get("DROID_AZURE_TENANT_ID"):
-                    tenant_id = environ.get("DROID_AZURE_TENANT_ID")
-                    config["tenant_id"] = tenant_id
+                if environ.get("DROID_AZURE_CERT_PASS"):
+                    config["cert_pass"] = environ.get("DROID_AZURE_CERT_PASS")
                 else:
-                    raise Exception("Please use: export DROID_AZURE_TENANT_ID=<tenant_id>")
-
-                if environ.get("DROID_AZURE_CLIENT_ID"):
-                    client_id = environ.get("DROID_AZURE_CLIENT_ID")
-                    config["client_id"] = client_id
-                else:
-                    raise Exception("Please use: export DROID_AZURE_CLIENT_ID=<client_id>")
-
-                if environ.get("DROID_AZURE_CLIENT_SECRET"):
-                    client_secret = environ.get("DROID_AZURE_CLIENT_SECRET")
-                    config["client_secret"] = client_secret
-                else:
-                    raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
+                    config["cert_pass"] = None
 
         return config
 

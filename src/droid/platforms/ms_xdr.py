@@ -13,6 +13,10 @@ from droid.color import ColorLogger
 from droid.platforms.common import get_pipeline_group_match
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.hazmat.backends import default_backend
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -39,13 +43,20 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             self._query_period = self._parameters["query_period"]
 
+        if "auth_cert" in self._parameters:
+            self._auth_cert = self._parameters["auth_cert"]
+        else:
+            self._auth_cert = None
+
         if "credential_file" in self._parameters:
             try:
                 with open(self._parameters["credential_file"], "r") as file:
                     credentials = yaml.safe_load(file)
-                    self._client_id = credentials["client_id"]
+                self._client_id = credentials["client_id"]
+                if not self._auth_cert:
                     self._client_secret = credentials["client_secret"]
-                    self._tenant_id = credentials["tenant_id"]
+                self._tenant_id = credentials["tenant_id"]
+                self._cert_pass = self._parameters.get("cert_pass", None)
             except Exception as e:
                 raise Exception(f"Error while reading the credential file {e}")
         elif "app" in (
@@ -53,7 +64,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         ):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
-            self._client_secret = self._parameters["client_secret"]
+            if not self._auth_cert:
+                self._client_secret = self._parameters["client_secret"]
+            self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (
             self._parameters["search_auth"] or self._parameters["export_auth"]
         ):
@@ -190,10 +203,28 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             authority = f"https://login.microsoftonline.com/{tenant_id}"
             # Create a confidential client application
+            if self._auth_cert:
+                with open(self._auth_cert, "rb") as file:
+                    certificate_data = file.read()
+
+                cert = x509.load_pem_x509_certificate(
+                    certificate_data, default_backend()
+                )
+                fingerprint = cert.fingerprint(hashes.SHA1())
+                fingerprint = fingerprint.hex()
+
+                client_credential = {
+                    "private_key": certificate_data,
+                    "thumbprint": fingerprint,
+                    "passphrase": self._cert_pass,
+                }
+            else:
+                client_credential = self._client_secret
+
             app = ConfidentialClientApplication(
                 self._client_id,
                 authority=authority,
-                client_credential=self._client_secret,
+                client_credential=client_credential,
             )
 
             # Acquire a token
