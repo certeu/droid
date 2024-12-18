@@ -32,6 +32,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._parameters = parameters
         self._export_mssp = export_mssp
 
+        # Search parameters
+
+        self._search_daysago = self._parameters.get("days_ago", 1)
+
+        if not 1 <= self._search_daysago <= 30:
+            self.logger.warning("Invalid 'days_ago' value. Expected a value between 1 and 30, but got %d. Defaulting to 1")
+            self._search_daysago = 1
+
+        # Auth parameters
+
         self._query_period_groups = self._parameters.get("rule_parameters", {}).get(
             "query_period_groups"
         )
@@ -84,6 +94,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
+
+        # Export parameters
+
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
         else:
@@ -101,7 +114,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise
 
     def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
-        payload = {"Query": rule_converted, "Timespan": "P1D"}
+        payload = {"Query": rule_converted, "Timespan": f"P{self._search_daysago}D"}
         try:
             if tenant_id:
                 self.logger.info(
