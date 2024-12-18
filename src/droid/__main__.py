@@ -199,7 +199,8 @@ def droid_platform_config(args, config_path):
             if "export_auth" in config and config["export_auth"] not in auth_methods:
                 raise ValueError(f"Invalid export_auth: {config['export_auth']}")
 
-            if (config["search_auth"] == "app" and not "credential_file" in config) or (config["export_auth"] == "app" and args.export and not "credential_file" in config):
+            if (config["search_auth"] == "app" and not "credential_file" in config) \
+            or (config["export_auth"] == "app" and args.export and not "credential_file" in config):
 
                 if environ.get("DROID_AZURE_TENANT_ID"):
                     tenant_id = environ.get("DROID_AZURE_TENANT_ID")
