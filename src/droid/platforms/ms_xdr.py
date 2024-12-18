@@ -58,10 +58,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self._client_id = credentials["client_id"]
                 self._client_secret = credentials["client_secret"]
                 self._tenant_id = credentials["tenant_id"]
-                if "cert_pass" in credentials:
-                    self._cert_pass = credentials["cert_pass"]
-                else:
-                    self._cert_pass = None
+                self._cert_pass = self._parameters.get("cert_pass", None)
             except Exception as e:
                 raise Exception(f"Error while reading the credential file {e}")
         elif "app" in (
@@ -70,7 +67,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._tenant_id = self._parameters["tenant_id"]
             self._client_id = self._parameters["client_id"]
             self._client_secret = self._parameters["client_secret"]
-            self._cert_pass = self._parameters["cert_pass"]
+            self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (
             self._parameters["search_auth"] or self._parameters["export_auth"]
         ):
