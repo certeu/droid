@@ -713,88 +713,19 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise
         return impactedAssetsList
 
-    def _get(
+    def _request_with_retries(
         self,
-        url=None,
-        headers=None,
-        params=None,
-        tenant_id=None,
-        timeout=120,
-        max_retries=3,
-        retry_delay=60,
-    ):
-        """
-        Sends a GET request to Microsoft Graph Security API with error handling
-        and retries for specific cases like 429, 500+ errors.
-        """
-
-        api_url = self._api_base_url + url
-
-        token = self._token if not tenant_id else self.acquire_token(tenant_id)
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-
-        if headers:
-            headers.update(headers)
-
-        retry_count = 0
-
-        while retry_count < max_retries:
-            try:
-                response = requests.get(
-                    api_url, headers=headers, params=params, timeout=timeout
-                )
-
-                if response.status_code == 429:
-                    self.logger.warning(
-                        f"Rate limit reached, retrying in {retry_delay} seconds "
-                        f"(attempt {retry_count+1}/{max_retries})"
-                    )
-                    time.sleep(retry_delay)
-                    retry_count += 1
-
-                elif 500 <= response.status_code < 600:
-                    self.logger.warning(
-                        f"Server error {response.status_code}, retrying in "
-                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
-                    )
-                    time.sleep(retry_delay)
-                    retry_count += 1
-
-                else:
-                    return response.json(), response.status_code
-
-            except requests.exceptions.Timeout:
-                self.logger.warning(
-                    f"GET request timed out after {timeout} seconds "
-                    f"(attempt {retry_count+1}/{max_retries})"
-                )
-                retry_count += 1
-                time.sleep(retry_delay)
-
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"An error occurred: {str(e)}")
-                return None, 500
-
-        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
-        return None, 500
-
-    def _post(
-        self,
+        method,
         url=None,
         payload=None,
         headers=None,
         params=None,
         tenant_id=None,
         timeout=120,
-        max_retries=3,
         retry_delay=60,
     ):
         """
-        Sends a POST request to Microsoft Graph Security API with error handling
+        Sends a request to Microsoft Graph Security API with error handling
         and retries for specific cases like 429, 500+ errors.
         """
 
@@ -810,114 +741,80 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if headers:
             headers.update(headers)
 
-        retry_count = 0
-
-        while retry_count < max_retries:
+        while True:
             try:
-                response = requests.post(
-                    api_url, headers=headers, json=payload, timeout=timeout
-                )
+                if method == "GET":
+                    response = requests.get(
+                        api_url, headers=headers, params=params, timeout=timeout
+                    )
+                elif method == "POST":
+                    response = requests.post(
+                        api_url, headers=headers, json=payload, timeout=timeout
+                    )
+                elif method == "PATCH":
+                    response = requests.patch(
+                        api_url, headers=headers, json=payload, timeout=timeout
+                    )
+                else:
+                    self.logger.error(f"Unsupported HTTP method: {method}")
+                    return None, 500
 
                 if response.status_code == 429:
                     self.logger.warning(
-                        f"Rate limit reached, retrying in {retry_delay} seconds "
-                        f"(attempt {retry_count+1}/{max_retries})"
+                        f"Rate limit reached, retrying in {retry_delay} seconds"
                     )
                     time.sleep(retry_delay)
-                    retry_count += 1
 
                 elif 500 <= response.status_code < 600:
                     self.logger.warning(
-                        f"Server error {response.status_code}, retrying in "
-                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
+                        f"Server error {response.status_code}, retrying in {retry_delay} seconds"
                     )
                     time.sleep(retry_delay)
-                    retry_count += 1
 
                 else:
                     return response.json(), response.status_code
 
             except requests.exceptions.Timeout:
                 self.logger.warning(
-                    f"POST request timed out after {timeout} seconds "
-                    f"(attempt {retry_count+1}/{max_retries})"
+                    f"{method} request timed out after {timeout} seconds"
                 )
-                retry_count += 1
                 time.sleep(retry_delay)
 
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"An error occurred: {str(e)}")
                 return None, 500
 
-        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
-        return None, 500
+    def _get(self, url=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
+        return self._request_with_retries(
+            method="GET",
+            url=url,
+            headers=headers,
+            params=params,
+            tenant_id=tenant_id,
+            timeout=timeout,
+            retry_delay=retry_delay,
+        )
 
-    def _patch(
-        self,
-        url=None,
-        payload=None,
-        headers=None,
-        params=None,
-        tenant_id=None,
-        timeout=120,
-        max_retries=3,
-        retry_delay=60,
-    ):
-        """
-        Sends a PATCH request to Microsoft Graph Security API with error handling
-        and retries for specific cases like 429, 500+ errors.
-        """
+    def _post(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
+        return self._request_with_retries(
+            method="POST",
+            url=url,
+            payload=payload,
+            headers=headers,
+            params=params,
+            tenant_id=tenant_id,
+            timeout=timeout,
+            retry_delay=retry_delay,
+        )
 
-        api_url = self._api_base_url + url
-
-        token = self._token if not tenant_id else self.acquire_token(tenant_id)
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-
-        if headers:
-            headers.update(headers)
-
-        retry_count = 0
-
-        while retry_count < max_retries:
-            try:
-                response = requests.patch(
-                    api_url, headers=headers, json=payload, timeout=timeout
-                )
-
-                if response.status_code == 429:
-                    self.logger.warning(
-                        f"Rate limit reached, retrying in {retry_delay} seconds "
-                        f"(attempt {retry_count+1}/{max_retries})"
-                    )
-                    time.sleep(retry_delay)
-                    retry_count += 1
-
-                elif 500 <= response.status_code < 600:
-                    self.logger.warning(
-                        f"Server error {response.status_code}, retrying in "
-                        f"{retry_delay} seconds (attempt {retry_count+1}/{max_retries})"
-                    )
-                    time.sleep(retry_delay)
-                    retry_count += 1
-
-                else:
-                    return response.json(), response.status_code
-
-            except requests.exceptions.Timeout:
-                self.logger.warning(
-                    f"PATCH request timed out after {timeout} seconds "
-                    f"(attempt {retry_count+1}/{max_retries})"
-                )
-                retry_count += 1
-                time.sleep(retry_delay)
-
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"An error occurred: {str(e)}")
-                return None, 500
-
-        self.logger.error(f"Failed to get a valid response after {max_retries} retries")
-        return None, 500
+    def _patch(self, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
+        return self._request_with_retries(
+            method="PATCH",
+            url=url,
+            payload=payload,
+            headers=headers,
+            params=params,
+            tenant_id=tenant_id,
+            timeout=timeout,
+            retry_delay=retry_delay,
+        )
