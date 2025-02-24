@@ -84,6 +84,7 @@ class SentinelPlatform(AbstractPlatform):
 
         self._alert_prefix = self._parameters.get("alert_prefix", None)
         self._export_list_mssp = self._parameters.get("export_list_mssp", None)
+        self._mssp_search_exclude_list = self._parameters.get("mssp_search_exclude_list", None)
 
     def mitre_tactics(self, rule_content) -> list:
         """
@@ -194,6 +195,8 @@ class SentinelPlatform(AbstractPlatform):
                 }
 
             workspace_list.append(entry_dict)
+
+        workspace_list = [entry for entry in workspace_list if entry["customer"] not in self._export_list_mssp]
 
         return workspace_list
 
