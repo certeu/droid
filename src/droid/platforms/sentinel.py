@@ -345,7 +345,6 @@ class SentinelPlatform(AbstractPlatform):
                 return None
 
         except ResourceNotFoundError:
-            self.logger.error(f"Rule not found {rule_file} in {workspace_name}")
             return None
 
         except Exception as e:
@@ -373,7 +372,6 @@ class SentinelPlatform(AbstractPlatform):
                 return None
 
         except ResourceNotFoundError:
-            self.logger.error(f"Rule not found {rule_file}")
             return None
 
         except Exception as e:

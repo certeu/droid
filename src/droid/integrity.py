@@ -125,6 +125,10 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on workspace {workspace_name} from {group} - error {e}")
             return error
 
+        error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+        if error is not None:
+            return error
+
         error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
@@ -206,7 +210,6 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
     error_occured = False
 
     for group, info in export_list.items():
-
         tenant_id = info['tenant_id']
 
         logger.debug(f"Processing rule on tenant {tenant_id} from group id {group}")
@@ -216,11 +219,12 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on tenant {tenant_id} from {group} - error {e}")
             return error
 
-        if not saved_search:
-            error = True
-            logger.error(f"Rule not found {rule_file} in {group} - {tenant_id}")
-        else:
-            error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
+        error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+        if error is not None:
+            error_occured = True
+            continue
+
+        error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
             error_occured = True
