@@ -23,6 +23,19 @@ def load_rule(rule_file):
             error = True
             return error
 
+def check_rule_removed(rule_content, rule_file, saved_search, logger, error):
+    is_removed = rule_content.get("custom", {}).get("removed")
+
+    if not saved_search:
+        if is_removed:
+            logger.info(f"The rule {rule_file} is marked as removed and not found on the platform as expected")
+            error = False
+        else:
+            logger.error(f"Rule not found {rule_file}")
+            error = True
+        return error
+    return None
+
 def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform, rule_file, parameters, logger, error):
     try:
         saved_search: dict = platform.search_savedsearch(rule_content)
@@ -36,12 +49,11 @@ def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform
         error = True
         return error
 
-    if saved_search:
-        logger.info(f"Successfully retrieved the rule {rule_file}")
-    else:
-        logger.error(f"Rule not found {rule_file}")
-        error = True
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    if error is not None:
         return error
+
+    logger.info(f"Successfully retrieved the rule {rule_file}")
 
     result = {
         "description": saved_search["description"],
@@ -122,11 +134,10 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
         return error
 
 def integrity_rule_sentinel(
-            rule_converted, rule_content, platform: SentinelPlatform,
-            rule_file, parameters, logger,
-            error, saved_search=None
-            ):
-
+        rule_converted, rule_content, platform: SentinelPlatform,
+        rule_file, parameters, logger,
+        error, saved_search=None
+):
     try:
         if not saved_search:
             saved_search: dict = platform.get_rule(rule_content, rule_file)
@@ -140,12 +151,11 @@ def integrity_rule_sentinel(
         "description": "description"
     }
 
-    if saved_search:
-        logger.info(f"Successfully retrieved the rule {rule_file}")
-    else:
-        logger.error(f"Rule not found {rule_file}")
-        error = True
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    if error is not None:
         return error
+
+    logger.info(f"Successfully retrieved the rule {rule_file}")
 
     result = {
         "name": saved_search.name,
@@ -156,7 +166,6 @@ def integrity_rule_sentinel(
     rule_content["detection"] = rule_converted
 
     for key in mapping:
-
         rule_key = key
         result_key = mapping[key]
 
@@ -220,7 +229,6 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
         return error
 
 def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, saved_search=None):
-
     try:
         if not saved_search:
             saved_search: dict = platform.get_rule(rule_content["id"])
@@ -228,12 +236,11 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
         return error
 
-    if saved_search:
-        logger.info(f"Successfully retrieved the rule {rule_file}")
-    else:
-        logger.error(f"Rule not found {rule_file}")
-        error = True
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    if error is not None:
         return error
+
+    logger.info(f"Successfully retrieved the rule {rule_file}")
 
     result = {
         "description": saved_search["detectionAction"]["alertTemplate"]["description"],
@@ -247,7 +254,6 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         "description": "description"
     }
     for key in mapping:
-
         rule_key = key
         result_key = mapping[key]
 
@@ -256,7 +262,6 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         else:
             logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
             error = True
-
 
     # Check if disabled
     is_disabled = rule_content.get("custom", {}).get("disabled")
@@ -283,12 +288,11 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
         return error
 
-    if saved_search:
-        logger.info(f"Successfully retrieved the rule {rule_file}")
-    else:
-        logger.error(f"Rule not found {rule_file}")
-        error = True
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    if error is not None:
         return error
+
+    logger.info(f"Successfully retrieved the rule {rule_file}")
 
     if "metadata _id, _index, _version" not in rule_converted.lower() and "metadata _id, _index, _version" in saved_search["query"].lower():
         saved_search["query"] = saved_search["query"].replace("  METADATA _id, _index, _version", "")
@@ -306,7 +310,6 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
         "description": "description"
     }
     for key in mapping:
-
         rule_key = key
         result_key = mapping[key]
 
