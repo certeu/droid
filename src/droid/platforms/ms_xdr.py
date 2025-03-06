@@ -728,6 +728,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         api_url = self._api_base_url + url
         token, expiration = self._token, self._token_expiration
         if datetime.now() >= expiration - timedelta(minutes=5):  # Refresh token if it's about to expire
+            self.logger.debug(f"Refreshing the token since it's about to expire")
             token, expiration = self.acquire_token(tenant_id)
         headers = {
             "Authorization": f"Bearer {token}",
