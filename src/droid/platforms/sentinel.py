@@ -382,20 +382,51 @@ class SentinelPlatform(AbstractPlatform):
         """Remove an analytic rule in Sentinel
         Remove a scheduled alert rule in Sentinel
         """
-        credential = self.get_credentials()
+        if self._export_mssp:
+            if self._export_list_mssp:
+                error = False
+                self.logger.info("Exporting deletion to designated customers")
+                for group, info in self._export_list_mssp.items():
+                    workspace_name = info['workspace_name']
+                    self._tenant_id = info['tenant_id']
+                    resource_group_name = info['resource_group_name']
+                    subscription_id = info['subscription_id']
 
-        client = SecurityInsights(credential, self._subscription_id)
+                    self.logger.debug(f"Exporting deletion to {workspace_name} from group id {group}")
 
-        try:
-            client.alert_rules.delete(
-                resource_group_name=self._resource_group,
-                workspace_name=self._workspace_name,
-                rule_id=rule_content['id']
-            )
-            self.logger.info(f"Successfully deleted the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
-        except Exception as e:
-            self.logger.error(f"Could not delete the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
-            raise
+                    credential = self.get_credentials()
+
+                    client = SecurityInsights(credential, subscription_id)
+
+                    try:
+                        client.alert_rules.delete(
+                            resource_group_name=resource_group_name,
+                            workspace_name=workspace_name,
+                            rule_id=rule_content['id']
+                        )
+                        self.logger.info(f"Successfully deleted the rule {rule_file} from {workspace_name}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to delete the rule {rule_file} from {workspace_name} - error: {e}")
+                        error = True
+                if error:
+                    raise
+            else:
+                self.logger.error("Export list not found. Please provide the list of designated customers")
+                raise
+        else:
+            credential = self.get_credentials()
+            client = SecurityInsights(credential, self._subscription_id)
+            try:
+                client.alert_rules.delete(
+                    resource_group_name=self._resource_group,
+                    workspace_name=self._workspace_name,
+                    rule_id=rule_content['id']
+                )
+                self.logger.info(f"Successfully deleted the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+            except Exception as e:
+                self.logger.error(f"Could not delete the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
+                raise
+
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
