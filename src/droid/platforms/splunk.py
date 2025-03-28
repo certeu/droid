@@ -257,19 +257,30 @@ class SplunkPlatform(AbstractPlatform):
                 raise ValueError('Custom key alert.digest_mode must be either "0" or "1"')
 
         # Applying trigger actions config if override in custom
-        if 'actions' in rule_content.get('custom', {}):
-            alert_config['actions'] = rule_content['custom']["actions"]
+        custom_actions = rule_content.get('custom', {})
 
-            if 'action.webhook.param.url' in rule_content['custom']:
-                webhook_url = rule_content['custom']['action.webhook.param.url']
-                if str(webhook_url).startswith("$"):
-                    env = webhook_url[1:]
+        if 'actions' in custom_actions:
+            alert_config['actions'] = custom_actions['actions']
+
+        supported_action_params = [
+            'action.email.to',
+            'action.email.subject',
+            'action.email.message.alert',
+            'action.webhook.param.url'
+        ]
+
+        for param in supported_action_params:
+            if param in custom_actions:
+                value = custom_actions[param]
+                # Here we check for $env variables
+                if param == 'action.webhook.param.url' and str(value).startswith("$"):
+                    env = value[1:]
                     if not environ.get(env):
                         self.logger.error(f"Could not find {env} in env")
                         raise EnvironmentError(f"Could not find {env} in env")
-                    alert_config['action.webhook.param.url'] = environ.get(env)
-                else:
-                    alert_config['action.webhook.param.url'] = webhook_url
+                    value = environ.get(env)
+
+                alert_config[param] = value
 
         # Create or update the saved search
         if self.search_savedsearch(rule_content):  # If the rule already exists
