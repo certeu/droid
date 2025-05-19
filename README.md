@@ -18,6 +18,8 @@ Key features are:
 
 To get started with the tool, visit the [documentation page](https://certeu.github.io/droid-docs/getting-started/) and configure `droid` for your environment.
 
+Note: Python version 3.11.8+ is required
+
 ## 📚 Resources
 
 - [Sigma Unleashed: A Realistic Implementation](https://www.first.org/resources/papers/conf2024/1315-1350-Sigma-Unleashed-Mathieu-Le-Cleach.pdf)
