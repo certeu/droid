@@ -5,9 +5,13 @@ Module for Azure Sentinel
 import concurrent.futures
 import azure.mgmt.resourcegraph as arg
 import re
+import requests
+import time
 
-from azure.identity import DefaultAzureCredential
-from azure.identity import ClientSecretCredential
+from datetime import datetime, timedelta
+from os import environ
+from azure.identity import DefaultAzureCredential, ClientSecretCredential
+from azure.core.credentials import AccessToken, TokenCredential
 from azure.mgmt.resource import SubscriptionClient
 from azure.mgmt.securityinsight import SecurityInsights
 from azure.mgmt.securityinsight.models import TriggerOperator
@@ -22,6 +26,14 @@ from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 
+class CustomTokenCredential:
+    def __init__(self, token: str, expires_on: int):
+        self._token = token
+        self._expires_on = expires_on
+
+    def get_token(self, *scopes):
+        return AccessToken(self._token, self._expires_on)
+
 class SentinelPlatform(AbstractPlatform):
 
     def __init__(self, parameters: dict, logger_param: dict, export_mssp: bool=False) -> None:
@@ -32,6 +44,11 @@ class SentinelPlatform(AbstractPlatform):
         self._export_mssp = export_mssp
 
         self.logger = ColorLogger(__name__, **logger_param)
+
+        self._token = None
+        self._token_expiration = None
+        self._current_scope = None
+        self._client_workspaces = None
 
         required_parameters = [
             "threshold_operator",
@@ -139,20 +156,93 @@ class SentinelPlatform(AbstractPlatform):
         }
 
         return list(mitre_techniques) if mitre_techniques else None
+    
+    def _acquire_token_from_hook(self, hook_url, scope, tenant_id=None, max_retries=3, retry_delay=5):
+        """Acquire an Azure token using a custom hook."""
+        if not tenant_id:
+            tenant_id = self._tenant_id
 
-    def get_credentials(self):
-        """Get credentials
-        Authenticate on Azure using a authentication method and return the credential object
-        """
-        if self._parameters["search_auth"] == "default":
-            self.logger.debug("Default credential selected")
-            credential = DefaultAzureCredential()
-        else:
-            credential = ClientSecretCredential(self._tenant_id, self._client_id, self._client_secret)
+        if '{TENANT_ID}' in hook_url:
+            hook_url = hook_url.replace('{TENANT_ID}', tenant_id)
 
-        return credential
+        if '{SCOPE}' in hook_url:
+            hook_url = hook_url.replace('{SCOPE}', scope)
 
-    def get_workspaces(self, credential, export_mode=False):
+        # Check if the token is cached, still valid, and for the same scope
+        if self._token and datetime.now() < self._token_expiration and self._current_scope == scope:
+            self.logger.debug("Using cached token")
+            return self._token, self._token_expiration
+
+        headers = {}
+        api_key = environ.get('DROID_AZURE_TOKEN_X_API_KEY')
+        if api_key:
+            headers['X-API-Key'] = api_key
+
+        for attempt in range(max_retries):
+            try:
+                self.logger.debug(f"Attempting to acquire token from hook (Attempt {attempt + 1}/{max_retries})")
+                response = requests.get(hook_url, timeout=120, headers=headers)
+                response.raise_for_status()
+
+                # Extract token from response
+                token_data = response.json()
+                token = token_data.get("access_token")
+                if not token:
+                    self.logger.error("Access token not found in the response")
+                    raise Exception("Access token not found in the response")
+
+                # Set expiration time to 1 hour from now (default if not provided)
+                expiration = datetime.now() + timedelta(seconds=3600)
+                self._token, self._token_expiration, self._current_scope = token, expiration, scope
+
+                self.logger.debug(f"Successfully acquired token from hook for scope {scope}")
+                return token, expiration
+
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    self.logger.debug(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    self.logger.error("Failed to acquire token after maximum retries")
+                    raise Exception(f"Token acquisition failed: {str(e)}")
+
+    def get_credentials(self, scope="management.azure.com"):
+        """Get credentials for Azure Sentinel."""
+        auth_method = self._parameters.get("search_auth", "default")
+        custom_token_hook = environ.get('DROID_AZURE_TOKEN_HOOK')
+        self.logger.debug(f"Selected authentication method: {auth_method}")
+
+        # Use custom hook to acquire the token
+        if custom_token_hook:
+            self.logger.debug("Using custom hook to acquire the Azure token")
+            try:
+                token, expiration = self._acquire_token_from_hook(custom_token_hook, scope, self._tenant_id)
+
+                # Store token and expiration in instance variables
+                self._token = token
+                self._expires_on = int(expiration.timestamp())
+
+                # Return the CustomTokenCredential instance
+                return CustomTokenCredential(token=token, expires_on=self._expires_on)
+            except Exception as e:
+                self.logger.error(f"Error acquiring token from hook: {str(e)}")
+                raise Exception("Custom token acquisition failed")
+
+        # Use default Azure credentials
+        if auth_method == "default":
+            self.logger.debug("Using DefaultAzureCredential")
+            return DefaultAzureCredential()
+
+        # Use client secret credentials (app registration)
+        elif auth_method == "app":
+            self.logger.debug("Using ClientSecretCredential")
+            return ClientSecretCredential(self._tenant_id, self._client_id, self._client_secret)
+
+        # Unsupported authentication method
+        raise Exception(f"Unsupported authentication method: {auth_method}")
+
+    def get_workspaces(self, credential=None, export_mode=False):
 
         if export_mode:
             graph_query = 'resources | where name contains "SecurityInsights" | extend workspaceId = tostring(properties.workspaceResourceId) | project name, resourceGroup, subscriptionId'
@@ -160,6 +250,9 @@ class SentinelPlatform(AbstractPlatform):
         else:
             graph_query = 'resources | where name contains "SecurityInsights" | extend workspaceId = tostring(properties.workspaceResourceId) | project name, workspaceId'
             graph_key = "workspaceId"
+
+        if not credential:
+            credential = self.get_credentials()
 
         subsClient = SubscriptionClient(credential)
         subsRaw = []
@@ -254,30 +347,28 @@ class SentinelPlatform(AbstractPlatform):
 
     def run_sentinel_search(self, rule_converted, rule_file, mssp_mode):
 
-        credential = self.get_credentials()
-
-        try:
-            self.logger.debug("Creating the client instance")
-            client = LogsQueryClient(credential)
-            self.logger.debug("Successfully created the client instance")
-        except HttpResponseError as e:
-            self.logger.error(f"Error while connecting to Azure error: {e}")
-
         current_time = datetime.now(timezone.utc)
-
         start_time = current_time - timedelta(days=self._days_ago)
 
         try:
             if mssp_mode:
                 results = {}
-                client_workspaces = self.get_workspaces(credential)
+
+                # Check if client_workspaces has already been acquired
+                if self._client_workspaces is None:
+                    self.logger.debug("Fetching client workspaces...")
+                    self._client_workspaces = self.get_workspaces(self.get_credentials())
+                    self.logger.debug(f"Fetched client workspaces: {self._client_workspaces}")
+
+                client = LogsQueryClient(self.get_credentials(scope="api.loganalytics.io"))
+
                 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                     futures = {executor.submit(self.mssp_run_sentinel_search,
-                                               client,
-                                               rule_converted,
-                                               start_time,
-                                               current_time,
-                                               customer_info): customer_info for customer_info in client_workspaces}
+                                            client,
+                                            rule_converted,
+                                            start_time,
+                                            current_time,
+                                            customer_info): customer_info for customer_info in self._client_workspaces}
 
                     for future in concurrent.futures.as_completed(futures):
                         customer_info = futures[future]
@@ -298,10 +389,18 @@ class SentinelPlatform(AbstractPlatform):
 
             else:
                 self.logger.debug(f"Querying the workspace {self._workspace_id}")
+
+                try:
+                    self.logger.debug("Creating the client instance")
+                    client = LogsQueryClient(self.get_credentials())
+                    self.logger.debug("Successfully created the client instance")
+                except HttpResponseError as e:
+                    self.logger.error(f"Error while connecting to Azure error: {e}")
+
                 results = client.query_workspace(self._workspace_id,
-                                                 rule_converted,
-                                                 timespan=(start_time, current_time),
-                                                 server_timeout=self._timeout)
+                                                rule_converted,
+                                                timespan=(start_time, current_time),
+                                                server_timeout=self._timeout)
 
             if results.status == LogsQueryStatus.PARTIAL:
                 error = results.partial_error
@@ -309,13 +408,18 @@ class SentinelPlatform(AbstractPlatform):
                 self.logger.error(f"Rule {rule_file} partial error in query: {error}")
 
             elif results.status == LogsQueryStatus.SUCCESS:
-
                 total_result = 0
 
                 for table in results.tables:
                     total_result += len(table.rows)
 
                 return total_result
+
+        except HttpResponseError as e:
+            self.logger.error(f"Rule {rule_file} error: {e}")
+
+        except Exception as e:
+            self.logger.error(f"Rule {rule_file} error: {e}")
 
         except HttpResponseError as e:
             self.logger.error(f"Rule {rule_file} error: {e}")
