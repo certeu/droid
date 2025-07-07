@@ -71,8 +71,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._export_list_mssp = self._parameters["export_list_mssp"]
         
         self._api_base_url = "https://graph.microsoft.com/beta"
-        self._token = None
-        self._token_expiration = None
+        self._token_cache = {}
 
     def get_export_list_mssp(self) -> list:
 
@@ -214,22 +213,28 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
     def acquire_token(self, tenant_id=None):
         scope = ["https://graph.microsoft.com/.default"]
-
         # Check if the custom token hook is set
         custom_token_hook = environ.get('DROID_AZURE_TOKEN_HOOK')
         if custom_token_hook:
             self.logger.debug("Custom token hook selected")
             token, expiration = self._acquire_token_from_hook(custom_token_hook, tenant_id=tenant_id)
             return token, expiration
-        
+
         if not tenant_id:
             tenant_id = self._tenant_id
+
+        # Check if a valid token already exists for the tenant
+        if tenant_id in self._token_cache:
+            token, expiration = self._token_cache[tenant_id]
+            if datetime.now() < expiration:
+                self.logger.debug(f"Using cached token for tenant {tenant_id}")
+                return token, expiration
+
         if self._parameters["search_auth"] == "default":
             self.logger.debug("Default credential selected")
             credential = DefaultAzureCredential()
             token = credential.get_token(*scope).token
             expiration = datetime.now() + timedelta(hours=1)  # Assuming token is valid for 1 hour
-            return token, expiration
         else:
             authority = f"https://login.microsoftonline.com/{tenant_id}"
             if self._auth_cert:
@@ -254,10 +259,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             if "access_token" in result:
                 token = result["access_token"]
                 expiration = datetime.now() + timedelta(seconds=result["expires_in"])
-                return token, expiration
             else:
                 self.logger.error(f'Failed to acquire token: {result["error_description"]}')
                 raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
+
+        # Store the token and its expiration time in the cache
+        self._token_cache[tenant_id] = (token, expiration)
+        return token, expiration
 
     def process_query_period(self, query_period: str, rule_file: str):
         """Process the query period time
@@ -735,14 +743,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if not tenant_id:
             tenant_id = self._tenant_id
 
+        # Check if a valid token already exists for the tenant
+        if tenant_id in self._token_cache:
+            token, expiration = self._token_cache[tenant_id]
+            if datetime.now() < expiration:
+                self.logger.debug(f"Using cached token for tenant {tenant_id}")
+                return token, expiration
+
         # Replace {TENANT_ID} with the actual tenant_id if it exists in the URL
         if '{TENANT_ID}' in hook_url:
             hook_url = hook_url.replace('{TENANT_ID}', tenant_id)
-
-        # Check if the token is about to expire or has expired
-        if self._token is not None and datetime.now() < self._token_expiration:
-            self.logger.debug("Using cached token")
-            return self._token, self._token_expiration
 
         headers = {}
         api_key = environ.get('DROID_AZURE_TOKEN_X_API_KEY')
@@ -761,9 +771,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise Exception("Access token not found in the response")
                 expiration = datetime.now() + timedelta(seconds=3600)
 
-                # Cache the token and its expiration time
-                self._token, self._token_expiration = token, expiration
-
+                # Store the token and its expiration time in the cache
+                self._token_cache[tenant_id] = (token, expiration)
                 return token, expiration
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"Attempt {attempt + 1} failed to acquire token from custom hook: {str(e)}")
@@ -777,18 +786,20 @@ class MicrosoftXDRPlatform(AbstractPlatform):
     def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
         api_url = self._api_base_url + url
 
-        # Check if the token is about to expire or has expired
-        if self._token is None or datetime.now() >= self._token_expiration:
-            self.logger.debug("Refreshing the token since it has expired or does not exist")
+        # Check if the token is about to expire or has expired for the tenant
+        if tenant_id not in self._token_cache or datetime.now() >= self._token_cache[tenant_id][1]:
+            self.logger.debug(f"Refreshing the token for tenant {tenant_id} since it has expired or does not exist")
             token, expiration = self.acquire_token(tenant_id)
-            self._token, self._token_expiration = token, expiration
+            self._token_cache[tenant_id] = (token, expiration)
 
+        token, _ = self._token_cache[tenant_id]
         headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         if headers:
             headers.update(headers)
+
         while True:
             try:
                 if method == "GET":
@@ -802,6 +813,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 else:
                     self.logger.error(f"Unsupported HTTP method: {method}")
                     return None, 500
+
                 if response.status_code == 204:
                     return {}, response.status_code
                 elif response.status_code == 429:
@@ -811,10 +823,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.warning(f"Server error {response.status_code}, retrying in {retry_delay} seconds")
                     time.sleep(retry_delay)
                 elif response.status_code == 401:
-                    self.logger.warning("Token expired, refreshing token")
+                    self.logger.warning(f"Token expired for tenant {tenant_id}, refreshing token")
                     token, expiration = self.acquire_token(tenant_id)
-                    self._token, self._token_expiration = token, expiration
-                    headers["Authorization"] = f"Bearer {self._token}"
+                    self._token_cache[tenant_id] = (token, expiration)
+                    headers["Authorization"] = f"Bearer {token}"
                 else:
                     return response.json(), response.status_code
             except requests.exceptions.Timeout:
