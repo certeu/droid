@@ -19,7 +19,7 @@ from azure.mgmt.securityinsight.models import ScheduledAlertRule
 from azure.mgmt.securityinsight.models import EventGroupingSettings
 from azure.mgmt.securityinsight.models import IncidentConfiguration
 from azure.mgmt.securityinsight.models import GroupingConfiguration
-from azure.mgmt.securityinsight.models import EntityMapping, FieldMapping
+from azure.mgmt.securityinsight.models import EntityMapping, FieldMapping, SentinelEntityMapping
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
@@ -564,6 +564,16 @@ class SentinelPlatform(AbstractPlatform):
         else:
             entity_mappings = None
 
+        # Handling the sentinel entities
+
+        if rule_content.get('custom', {}).get('sentinel_entities'):
+            sentinel_entity_mappings = [
+                SentinelEntityMapping(column_name=col_name)
+                for col_name in rule_content['custom']['sentinel_entities']
+            ]
+        else:
+            sentinel_entity_mappings = None
+
         # Handling the severity
         if rule_content['level'] == 'critical':
             severity = 'high'
@@ -616,6 +626,7 @@ class SentinelPlatform(AbstractPlatform):
             incident_configuration=IncidentConfiguration(create_incident=create_incident, grouping_configuration=grouping_config),
             tactics=self.mitre_tactics(rule_content),
             entity_mappings=entity_mappings,
+            sentinel_entities_mappings=sentinel_entity_mappings,
             techniques=self.mitre_techniques(rule_content)
         )
 
