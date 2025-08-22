@@ -176,7 +176,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 raise
         else:
             existing_rule = self.get_rule(rule_content["id"])
-
+            tenant_id = self._tenant_id
             if existing_rule:
                 response, status_code = self._delete(
                     url=f"/security/rules/detectionRules/{existing_rule['id']}", tenant_id=tenant_id
