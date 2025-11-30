@@ -20,6 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.backends import default_backend
+from typing import Optional, Callable
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -29,6 +30,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self.logger = ColorLogger(__name__, **logger_param)
         self._parameters = parameters
         self._export_mssp = export_mssp
+        self._logger_param = logger_param
         self._search_daysago = self._parameters.get("days_ago", 1)
         if not 1 <= self._search_daysago <= 30:
             self.logger.warning("Invalid 'days_ago' value. Expected a value between 1 and 30, but got %d. Defaulting to 1")
@@ -69,9 +71,21 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._alert_prefix = None
         if "export_list_mssp" in self._parameters:
             self._export_list_mssp = self._parameters["export_list_mssp"]
+
+        # Conversion callback for re-converting rules with customer-specific filters
+        self._convert_rule_callback: Optional[Callable] = None
         
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token_cache = {}
+
+    def set_convert_rule_callback(self, callback: Callable) -> None:
+        """Set the callback function for converting rules with customer-specific filters
+
+        Args:
+            callback: A function that takes (rule_content, rule_file, platform, customer_name) 
+                     and returns the converted rule
+        """
+        self._convert_rule_callback = callback
 
     def get_export_list_mssp(self) -> list:
 
@@ -410,16 +424,41 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 for group, info in self._export_list_mssp.items():
 
                     tenant_id = info["tenant_id"]
+                    customer_name = info.get("customer_name")
+                    customer_filter_dir = info.get("customer_filters_directory")
                     self.logger.debug(
                         f"Exporting to tenant {tenant_id} from group id {group}"
                     )
 
+                    # Check for customer-specific filters and re-convert rule if needed
+                    customer_rule_converted = rule_converted
+                    customer_alert_rule = alert_rule.copy()
+
+                    if customer_filter_dir and self._convert_rule_callback:
+                        self.logger.info(
+                            f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}"
+                        )
+                        try:
+                            customer_rule_converted = self._convert_rule_callback(
+                                rule_content, rule_file, self, customer_filter_dir
+                            )
+                            # Update the alert rule with the customer-specific converted query
+                            customer_alert_rule = alert_rule.copy()
+                            customer_alert_rule["queryCondition"] = {"queryText": customer_rule_converted}
+                            self.logger.debug(
+                                f"Successfully re-converted rule for customer '{customer_name}'"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
+                            )
+
                     try:
                         self.push_detection_rule(
-                            alert_rule=alert_rule,
+                            alert_rule=customer_alert_rule,
                             rule_content=rule_content,
                             rule_file=rule_file,
-                            rule_converted=rule_converted,
+                            rule_converted=customer_rule_converted,
                             tenant_id=tenant_id,
                         )
                     except Exception as e:
@@ -427,7 +466,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                             f"Could not export the rule {rule_file} to tenant {tenant_id} error: {e}",
                             extra={
                                 "rule_file": rule_file,
-                                "rule_converted": rule_converted,
+                                "rule_converted": customer_rule_converted,
                                 "rule_content": rule_content,
                                 "error": e,
                             },

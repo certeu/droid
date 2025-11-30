@@ -1,0 +1,12 @@
+title: Filter Out Domain Controllers
+description: Filter out events from Domain Controllers for Pizza Planet customer
+logsource:
+    product: windows
+    category: process_creation
+filter:
+    rules:
+        - 93199800-b52a-4dec-b762-75212c196556
+    selection:
+        ComputerName|startswith: "DC-"
+    condition: not selection
+customer_name: "Pizza Planet"

@@ -113,8 +113,27 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
         subscription_id = info['subscription_id']
         resource_group_name = info['resource_group_name']
         workspace_name = info['workspace_name']
+        customer_name = info.get('customer_name')
+        customer_filter_dir = info.get('customer_filters_directory')
 
         logger.debug(f"Processing rule on {workspace_name} from group id {group}")
+
+        # Re-convert rule with customer-specific filters if available
+        customer_rule_converted = rule_converted
+        if customer_filter_dir and platform._convert_rule_callback:
+            logger.info(
+                f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}"
+            )
+            try:
+                customer_rule_converted = platform._convert_rule_callback(
+                    rule_content, rule_file, platform, customer_filter_dir
+                )
+                logger.debug(f"Successfully re-converted rule for customer '{customer_name}'")
+            except Exception as e:
+                logger.warning(
+                    f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
+                )
+
         try:
             saved_search: dict = platform.get_rule_mssp(
                 rule_content, rule_file, tenant_id,
@@ -129,7 +148,7 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
         if error is not None:
             return error
 
-        error = integrity_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
+        error = integrity_rule_sentinel(customer_rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
             error_occured = True
@@ -211,8 +230,27 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
 
     for group, info in export_list.items():
         tenant_id = info['tenant_id']
+        customer_name = info.get('customer_name')
+        customer_filter_dir = info.get('customer_filters_directory')
 
         logger.debug(f"Processing rule on tenant {tenant_id} from group id {group}")
+
+        # Re-convert rule with customer-specific filters if available
+        customer_rule_converted = rule_converted
+        if customer_filter_dir and platform._convert_rule_callback:
+            logger.info(
+                f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}"
+            )
+            try:
+                customer_rule_converted = platform._convert_rule_callback(
+                    rule_content, rule_file, platform, customer_filter_dir
+                )
+                logger.debug(f"Successfully re-converted rule for customer '{customer_name}'")
+            except Exception as e:
+                logger.warning(
+                    f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
+                )
+
         try:
             saved_search: dict = platform.get_rule(rule_content["id"], tenant_id)
         except Exception as e:
@@ -224,7 +262,7 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
             error_occured = True
             continue
 
-        error = integrity_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
+        error = integrity_rule_ms_xdr(customer_rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
             error_occured = True
