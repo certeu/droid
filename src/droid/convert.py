@@ -64,19 +64,42 @@ class Conversion:
         """
         return "kusto" if self._platform_name in ["microsoft_sentinel", "microsoft_xdr"] else None
 
-    def init_sigma_filters(self, rule_file, filter_directory: Optional[str] = None) -> None:
+    def init_sigma_filters(self, rule_file, customer_filter_directory: Optional[str] = None) -> None:
         """Function to load Sigma filters
+        
+        Loads filters from both the default filters directory AND customer-specific directory.
+        This allows base filters to be applied to all rules while customer-specific filters
+        can add or override for specific customers.
+        
         Args:
             rule_file: Path to the sigma rule file
-            filter_directory: Optional override for filter directory (used for customer-specific filters)
+            customer_filter_directory: Optional additional filter directory for customer-specific filters
+        
+        Returns:
+            SigmaCollection with rule and all applicable filters loaded
         """
-        effective_filter_dir = filter_directory or self._filters_directory
-        filters = SigmaCollection.load_ruleset(
-            [
-                Path(effective_filter_dir),
-                Path(rule_file)
-            ]
-        )
+        paths_to_load = []
+        
+        # Always load default filters first (if configured)
+        if self._filters_directory:
+            default_filter_path = Path(self._filters_directory)
+            if default_filter_path.exists():
+                paths_to_load.append(default_filter_path)
+                self.logger.debug(f"Loading default filters from: {self._filters_directory}")
+        
+        # Then load customer-specific filters (if provided)
+        if customer_filter_directory:
+            customer_filter_path = Path(customer_filter_directory)
+            if customer_filter_path.exists():
+                paths_to_load.append(customer_filter_path)
+                self.logger.debug(f"Loading customer-specific filters from: {customer_filter_directory}")
+            else:
+                self.logger.warning(f"Customer filter directory does not exist: {customer_filter_directory}")
+        
+        # Always include the rule file
+        paths_to_load.append(Path(rule_file))
+        
+        filters = SigmaCollection.load_ruleset(paths_to_load)
 
         return filters
 
@@ -86,14 +109,16 @@ class Conversion:
         Args:
             rule_file: Path to the sigma rule file
             customer_filter_directory: Optional customer-specific filter directory for MSSP mode
+                                       (will be combined with default filters, not replace them)
         """
         with open(rule_file, "r", encoding="utf-8") as file:
-            # Customer-specific filters take priority in MSSP mode
-            if customer_filter_directory:
-                self.logger.debug(f"Loading rule with customer-specific filters from: {customer_filter_directory}")
+            # Load with filters if any filter directory is configured
+            if self._filters_directory or customer_filter_directory:
+                if customer_filter_directory:
+                    self.logger.debug(f"Loading rule with default + customer-specific filters from: {customer_filter_directory}")
+                else:
+                    self.logger.debug("Loading rule with default filters only")
                 sigma_rule = self.init_sigma_filters(rule_file, customer_filter_directory)
-            elif self._filters_directory:
-                sigma_rule = self.init_sigma_filters(rule_file)
             else:
                 sigma_rule = SigmaCollection.from_yaml(file)
 
@@ -139,9 +164,13 @@ class Conversion:
                 pipeline = None
             backend: Backend = backend_class(processing_pipeline=pipeline)
 
-            # Apply customer-specific filters if provided (MSSP mode)
-            if customer_filter_directory:
+            # Log filter application details
+            if customer_filter_directory and self._filters_directory:
+                self.logger.info(f"Applying default filters + customer-specific filters from {customer_filter_directory}")
+            elif customer_filter_directory:
                 self.logger.info(f"Applying customer-specific filters from {customer_filter_directory}")
+            elif self._filters_directory:
+                self.logger.debug(f"Applying default filters from {self._filters_directory}")
 
             sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
             rule_converted = backend.convert(sigma_rule, self._format)[0]
