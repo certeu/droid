@@ -389,7 +389,7 @@ class SentinelPlatform(AbstractPlatform):
                     customer_rule_converted = self._convert_rule_callback(
                         rule_content, rule_file, self, customer_filter_dir
                     )
-                    self.logger.debug(f"Successfully re-converted rule for customer '{customer_name}'")
+                    self.logger.debug(f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}")
                 except Exception as e:
                     self.logger.warning(
                         f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
@@ -761,7 +761,7 @@ class SentinelPlatform(AbstractPlatform):
                                 techniques=alert_rule.techniques
                             )
                             self.logger.debug(
-                                f"Successfully re-converted rule for customer '{customer_name}'"
+                                f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}"
                             )
                         except Exception as e:
                             self.logger.warning(

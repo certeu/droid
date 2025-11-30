@@ -446,7 +446,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                             customer_alert_rule = alert_rule.copy()
                             customer_alert_rule["queryCondition"] = {"queryText": customer_rule_converted}
                             self.logger.debug(
-                                f"Successfully re-converted rule for customer '{customer_name}'"
+                                f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}"
                             )
                         except Exception as e:
                             self.logger.warning(

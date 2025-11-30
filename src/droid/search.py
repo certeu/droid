@@ -108,7 +108,7 @@ def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDR
                 customer_rule_converted = platform._convert_rule_callback(
                     rule_content, rule_file, platform, customer_filter_dir
                 )
-                logger.debug(f"Successfully re-converted rule for customer '{customer_name}'")
+                logger.debug(f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}")
             except Exception as e:
                 logger.warning(f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion.")
 
