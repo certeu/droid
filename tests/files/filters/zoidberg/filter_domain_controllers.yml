@@ -9,4 +9,4 @@ filter:
     selection:
         ComputerName|startswith: "DC-"
     condition: not selection
-customer_name: "Pizza Planet"
+customer_name: "Zoidberg"

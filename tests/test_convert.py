@@ -54,3 +54,10 @@ def test_convert_invalid_file_custom():
         main(["--convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/invalid/convert_invalid_rule.yml", "--config-file", "tests/files/test_config_custom_pipelines.toml"])
     assert error.type == SystemExit
     assert error.value.code == 1
+
+def test_convert_valid_file_with_customer_filter():
+    """Test conversion of valid sigma rule with customer-specific filter applied"""
+    with pytest.raises(SystemExit) as error:
+        main(["--convert", "--platform", "microsoft_xdr", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config.toml", "--mssp"])
+    assert error.type == SystemExit
+    assert error.value.code == 0
