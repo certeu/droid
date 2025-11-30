@@ -373,7 +373,6 @@ class SentinelPlatform(AbstractPlatform):
         for group, info in self._export_list_mssp.items():
             workspace_id = info.get('workspace_id')
             workspace_name = info.get('workspace_name')
-            tenant_id = info['tenant_id']
             customer_name = info.get('customer_name')
             customer_filter_dir = info.get('customer_filters_directory')
             
@@ -397,8 +396,10 @@ class SentinelPlatform(AbstractPlatform):
             
             try:
                 # Get credentials for the specific tenant
-                credential = self.get_credentials(tenant_id=tenant_id)
+                credential = self.get_credentials(scope="api.loganalytics.io")
                 client = LogsQueryClient(credential)
+                
+                self.logger.debug(f"Searching rule {rule_file} for '{customer_name or workspace_name}' with query: {customer_rule_converted}")
                 
                 results = client.query_workspace(
                     workspace_id,
@@ -474,6 +475,8 @@ class SentinelPlatform(AbstractPlatform):
                 except HttpResponseError as e:
                     self.logger.error(f"Error while connecting to Azure error: {e}")
 
+                self.logger.debug(f"Searching rule {rule_file} with query: {rule_converted}")
+                
                 results = client.query_workspace(self._workspace_id,
                                                 rule_converted,
                                                 timespan=(start_time, current_time),
@@ -773,6 +776,8 @@ class SentinelPlatform(AbstractPlatform):
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
 
+                    self.logger.debug(f"Exporting rule {rule_file} to '{customer_name or workspace_name}' with query: {customer_rule_converted}")
+                    
                     try:
                         client.alert_rules.create_or_update(
                             resource_group_name=resource_group_name,
@@ -792,6 +797,9 @@ class SentinelPlatform(AbstractPlatform):
         else:
             credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
+            
+            self.logger.debug(f"Exporting rule {rule_file} with query: {rule_converted}")
+            
             try:
                 client.alert_rules.create_or_update(
                     resource_group_name=self._resource_group,
@@ -803,4 +811,3 @@ class SentinelPlatform(AbstractPlatform):
             except Exception as e:
                 self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
                 raise
-

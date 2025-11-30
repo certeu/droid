@@ -179,6 +179,7 @@ def integrity_rule_sentinel(
         return error
 
     logger.info(f"Successfully retrieved the rule {rule_file}")
+    logger.debug(f"Checking integrity for rule {rule_file} with query: {rule_converted}")
 
     result = {
         "name": saved_search.name,
