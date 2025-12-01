@@ -41,6 +41,27 @@ def search_rule_splunk(rule_converted, platform: SplunkPlatform, rule_file, para
         error = True
         return error, search_warning
 
+def search_rule_sentinel_mssp(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error, search_warning):
+    """Search rule across designated customers with customer-specific filters."""
+    try:
+        # Use the designated customer search method which supports customer-specific filters
+        result: int = platform.run_sentinel_search_mssp_designated(rule_converted, rule_file, rule_content)
+
+        logger.info(f"Successfully searched the rule {rule_file}")
+
+        if result > 0:  # If the rule has match
+            logger.warning(f"(Sentinel MSSP) Match found for {rule_file}")
+            search_warning = True
+            return error, search_warning
+        else:
+            logger.info(f"(Sentinel MSSP) No hits for {rule_file}")
+            return error, search_warning
+
+    except Exception as e:
+        logger.error(f"Couldn't search for the rule {rule_file} - error {e}")
+        error = True
+        return error, search_warning
+
 def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, parameters, logger, error, search_warning, mssp_mode):
 
     try:
@@ -61,24 +82,38 @@ def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, 
         error = True
         return error, search_warning
 
-def search_rule_ms_xdr_mssp(rule_converted, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
+def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
 
     try:
         export_list = platform.get_export_list_mssp()
     except Exception as e:
         logger.error(f"Couldn't get the export list for the designated customers - error {e}")
-        return error
+        return error, search_warning
 
     logger.info("Searching for designated customers")
 
     for group, info in export_list.items():
 
         tenant_id = info['tenant_id']
+        customer_name = info.get('customer_name')
+        customer_filter_dir = info.get('customer_filters_directory')
 
         logger.debug(f"Processing rule on {tenant_id} from group id {group}")
 
+        # Re-convert rule with customer-specific filters if available
+        customer_rule_converted = rule_converted
+        if customer_filter_dir and platform._convert_rule_callback:
+            logger.info(f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}")
+            try:
+                customer_rule_converted = platform._convert_rule_callback(
+                    rule_content, rule_file, platform, customer_filter_dir
+                )
+                logger.debug(f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}")
+            except Exception as e:
+                logger.warning(f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion.")
+
         try:
-            result: int = platform.run_xdr_search(rule_converted, rule_file, tenant_id=tenant_id)
+            result: int = platform.run_xdr_search(customer_rule_converted, rule_file, tenant_id=tenant_id)
 
             logger.info(f"Successfully searched the rule {rule_file}")
 
@@ -155,14 +190,14 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
         return error, search_warning
     elif parameters.platform == "microsoft_sentinel" or (parameters.sentinel_xdr and parameters.platform == "microsoft_xdr"):
         if parameters.mssp:
-            error, search_warning = search_rule_sentinel(rule_converted, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=True)
+            error, search_warning = search_rule_sentinel_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
             return error, search_warning
         else:
             error, search_warning = search_rule_sentinel(rule_converted, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=False)
             return error, search_warning
     elif parameters.platform == "microsoft_xdr":
         if parameters.mssp:
-            error, search_warning = search_rule_ms_xdr_mssp(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
+            error, search_warning = search_rule_ms_xdr_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
             return error, search_warning
         else:
             error, search_warning = search_rule_ms_xdr(rule_converted, platform, rule_file, parameters, logger, error, search_warning)

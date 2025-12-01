@@ -32,6 +32,37 @@ windows = "microsoft_365_defender"
 
 #########################################
 
+[platforms.microsoft_xdr]
+
+alert_prefix = "[PIZZA]"
+
+## For searches
+
+days_ago = 30
+timeout = 120 # Search timeout for azure
+query_period = "0" # Near realtime
+
+## Authentication
+
+search_auth = "default"
+export_auth = "default"
+
+[platforms.microsoft_xdr.pipelines.windows_process_creation]
+
+pipelines = ["microsoft_365_defender"]
+product = "windows"
+category = "process_creation"
+
+    # Here we restrict the export of the rules to a restricted list only
+
+    [platforms.microsoft_xdr.export_list_mssp]
+        
+        [platforms.microsoft_xdr.export_list_mssp.Zoidberg]
+
+        tenant_id = "406a174b-e315-48bd-aa0a-cdaddc44250b"
+        customer_name = "Zoidberg"
+        customer_filters_directory = "tests/files/filters/zoidberg"
+
 [platforms.splunk]
 
 url = "splunk658.pizza-planet.local"

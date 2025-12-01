@@ -4,6 +4,7 @@ Module to convert the Sigma rules
 import yaml
 
 from pathlib import Path
+from typing import Optional
 from sigma.plugins import InstalledSigmaPlugins
 from sigma.conversion.base import Backend, SigmaCollection
 from sigma.exceptions import SigmaTransformationError
@@ -28,6 +29,7 @@ class Conversion:
         self._parameters = parameters["pipelines"]
         self._filters_directory = base_config.get("sigma_filters_directory", None)
         self._platform_name = platform_name
+        self._logger_param = logger_param
 
     def get_pipeline_config_group(self, rule_content):
         """Retrieve the logsource config group name
@@ -62,36 +64,75 @@ class Conversion:
         """
         return "kusto" if self._platform_name in ["microsoft_sentinel", "microsoft_xdr"] else None
 
-    def init_sigma_filters(self, rule_file) -> None:
+    def init_sigma_filters(self, rule_file, customer_filter_directory: Optional[str] = None) -> None:
         """Function to load Sigma filters
+        
+        Loads filters from both the default filters directory AND customer-specific directory.
+        This allows base filters to be applied to all rules while customer-specific filters
+        can add or override for specific customers.
+        
         Args:
-            filter_path
+            rule_file: Path to the sigma rule file
+            customer_filter_directory: Optional additional filter directory for customer-specific filters
+        
+        Returns:
+            SigmaCollection with rule and all applicable filters loaded
         """
-        filters = SigmaCollection.load_ruleset(
-            [
-                Path(self._filters_directory),
-                Path(rule_file)
-            ]
-        )
+        paths_to_load = []
+        
+        # Always load default filters first (if configured)
+        if self._filters_directory:
+            default_filter_path = Path(self._filters_directory)
+            if default_filter_path.exists():
+                paths_to_load.append(default_filter_path)
+                self.logger.debug(f"Loading default filters from: {self._filters_directory}")
+        
+        # Then load customer-specific filters (if provided)
+        if customer_filter_directory:
+            customer_filter_path = Path(customer_filter_directory)
+            if customer_filter_path.exists():
+                paths_to_load.append(customer_filter_path)
+                self.logger.debug(f"Loading customer-specific filters from: {customer_filter_directory}")
+            else:
+                self.logger.warning(f"Customer filter directory does not exist: {customer_filter_directory}")
+        
+        # Always include the rule file
+        paths_to_load.append(Path(rule_file))
+        
+        filters = SigmaCollection.load_ruleset(paths_to_load)
 
         return filters
 
-    def init_sigma_rule(self, rule_file) -> None:
+    def init_sigma_rule(self, rule_file, customer_filter_directory: Optional[str] = None) -> None:
         """Function to load a sigma rule
 
         Args:
-            rule
+            rule_file: Path to the sigma rule file
+            customer_filter_directory: Optional customer-specific filter directory for MSSP mode
+                                       (will be combined with default filters, not replace them)
         """
         with open(rule_file, "r", encoding="utf-8") as file:
-            if self._filters_directory:
-                sigma_rule = self.init_sigma_filters(rule_file)
+            # Load with filters if any filter directory is configured
+            if self._filters_directory or customer_filter_directory:
+                if customer_filter_directory:
+                    self.logger.debug(f"Loading rule with default + customer-specific filters from: {customer_filter_directory}")
+                else:
+                    self.logger.debug("Loading rule with default filters only")
+                sigma_rule = self.init_sigma_filters(rule_file, customer_filter_directory)
             else:
                 sigma_rule = SigmaCollection.from_yaml(file)
 
         return sigma_rule
 
-    def convert_rule(self, rule_content, rule_file, platform):
+    def convert_rule(self, rule_content, rule_file, platform, customer_filter_directory: Optional[str] = None):
+        """Convert a Sigma rule to the target platform query language
 
+        Args:
+            rule_content: The parsed rule content dictionary
+            rule_file: Path to the rule file
+            platform: The target platform instance
+            customer_filter_directory: Optional customer-specific filter directory for MSSP mode
+        """
         plugins = InstalledSigmaPlugins.autodiscover()
         backends = plugins.backends
         pipeline_resolver = plugins.get_pipeline_resolver()
@@ -122,7 +163,16 @@ class Conversion:
             else:
                 pipeline = None
             backend: Backend = backend_class(processing_pipeline=pipeline)
-            sigma_rule = self.init_sigma_rule(rule_file)
+
+            # Log filter application details
+            if customer_filter_directory and self._filters_directory:
+                self.logger.info(f"Applying default filters + customer-specific filters from {customer_filter_directory}")
+            elif customer_filter_directory:
+                self.logger.info(f"Applying customer-specific filters from {customer_filter_directory}")
+            elif self._filters_directory:
+                self.logger.debug(f"Applying default filters from {self._filters_directory}")
+
+            sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
             rule_converted = backend.convert(sigma_rule, self._format)[0]
             # For esql and eql backend only
             if isinstance(platform, ElasticPlatform):
@@ -175,6 +225,79 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
         platform_name = parameters.platform
         target = Conversion(droid_config, base_config, platform_name, logger_param)
         platform = None
+        
+        # Handle MSSP convert mode - show conversions for each customer with their filters
+        if parameters.mssp:
+            export_list_mssp = droid_config.get("export_list_mssp", None)
+            if not export_list_mssp:
+                logger.error(f"No export_list_mssp found in configuration for platform {platform_name}")
+                error = True
+                return error, search_warning
+            
+            logger.info("MSSP Convert Mode: Converting rules for each customer with their filters")
+            
+            # Process rules for each customer
+            if path.is_dir():
+                for rule_file in path.rglob("*.y*ml"):
+                    rule_content = load_rule(rule_file)
+                    logger.info(f"Converting rule: {rule_file}")
+                    
+                    # First show default conversion (no customer filters)
+                    try:
+                        default_converted = target.convert_rule(rule_content, rule_file, platform)
+                        logger.info(f"  [DEFAULT] {default_converted}")
+                    except Exception as e:
+                        logger.error(f"  [DEFAULT] Conversion failed: {e}")
+                        continue
+                    
+                    # Then convert for each customer with their filters
+                    for group, info in export_list_mssp.items():
+                        customer_name = info.get('customer_name', group)
+                        customer_filter_dir = info.get('customer_filters_directory')
+                        
+                        if customer_filter_dir:
+                            try:
+                                customer_converted = target.convert_rule(
+                                    rule_content, rule_file, platform, customer_filter_dir
+                                )
+                                logger.info(f"  [{customer_name}] {customer_converted}")
+                            except Exception as e:
+                                logger.warning(f"  [{customer_name}] Conversion failed: {e}")
+                        else:
+                            logger.info(f"  [{customer_name}] No filters configured - same as default")
+                    
+                    print()  # Empty line between rules for readability
+                    
+            elif path.is_file():
+                rule_file = path
+                rule_content = load_rule(rule_file)
+                logger.info(f"Converting rule: {rule_file}")
+                
+                # First show default conversion (no customer filters)
+                try:
+                    default_converted = target.convert_rule(rule_content, rule_file, platform)
+                    logger.info(f"  [DEFAULT] {default_converted}")
+                except Exception as e:
+                    logger.error(f"  [DEFAULT] Conversion failed: {e}")
+                    return True, search_warning
+                
+                # Then convert for each customer with their filters
+                for group, info in export_list_mssp.items():
+                    customer_name = info.get('customer_name', group)
+                    customer_filter_dir = info.get('customer_filters_directory')
+                    
+                    if customer_filter_dir:
+                        try:
+                            customer_converted = target.convert_rule(
+                                rule_content, rule_file, platform, customer_filter_dir
+                            )
+                            logger.info(f"  [{customer_name}] {customer_converted}")
+                        except Exception as e:
+                            logger.warning(f"  [{customer_name}] Conversion failed: {e}")
+                    else:
+                        logger.info(f"  [{customer_name}] No filters configured - same as default")
+            
+            return error, search_warning
 
     if parameters.platform and (parameters.search or parameters.export or parameters.integrity):
         platform_name = parameters.platform
@@ -187,14 +310,33 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
             platform = ElasticPlatform(droid_config, logger_param, "eql", raw=False)
         elif "microsoft_sentinel" in platform_name and parameters.mssp:
             platform = SentinelPlatform(droid_config, logger_param, export_mssp=True)
+            # Set up callback for customer-specific filter conversion
+            # The callback receives customer_filter_directory directly from export_list_mssp
+            platform.set_convert_rule_callback(
+                lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
+                    rule_content, rule_file, plat, customer_filter_dir
+                )
+            )
         elif "microsoft_sentinel" in platform_name:
             platform = SentinelPlatform(droid_config, logger_param, export_mssp=False)
         elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr and parameters.mssp:
             platform = SentinelPlatform(droid_config, logger_param, export_mssp=True)
+            # Set up callback for customer-specific filter conversion
+            platform.set_convert_rule_callback(
+                lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
+                    rule_content, rule_file, plat, customer_filter_dir
+                )
+            )
         elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr:
             platform = SentinelPlatform(droid_config, logger_param, export_mssp=False)
         elif "microsoft_xdr" in platform_name and parameters.mssp:
             platform = MicrosoftXDRPlatform(droid_config, logger_param, export_mssp=True)
+            # Set up callback for customer-specific filter conversion
+            platform.set_convert_rule_callback(
+                lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
+                    rule_content, rule_file, plat, customer_filter_dir
+                )
+            )
         elif "microsoft_xdr" in platform_name:
             platform = MicrosoftXDRPlatform(droid_config, logger_param, export_mssp=False)
 

@@ -42,6 +42,7 @@ class SentinelPlatform(AbstractPlatform):
 
         self._parameters = parameters
         self._export_mssp = export_mssp
+        self._logger_param = logger_param
 
         self.logger = ColorLogger(__name__, **logger_param)
 
@@ -102,6 +103,18 @@ class SentinelPlatform(AbstractPlatform):
         self._alert_prefix = self._parameters.get("alert_prefix", None)
         self._export_list_mssp = self._parameters.get("export_list_mssp", None)
         self._mssp_search_exclude_list = self._parameters.get("mssp_search_exclude_list", None)
+
+        # Conversion callback for re-converting rules with customer-specific filters
+        self._convert_rule_callback = None
+
+    def set_convert_rule_callback(self, callback) -> None:
+        """Set the callback function for converting rules with customer-specific filters
+
+        Args:
+            callback: A function that takes (rule_content, rule_file, platform, customer_filter_dir) 
+                     and returns the converted rule
+        """
+        self._convert_rule_callback = callback
 
     def mitre_tactics(self, rule_content) -> list:
         """
@@ -345,6 +358,71 @@ class SentinelPlatform(AbstractPlatform):
             })
             raise
 
+    def run_sentinel_search_mssp_designated(self, rule_converted, rule_file, rule_content):
+        """
+        Run search for designated customers using export_list_mssp with customer-specific filters.
+        """
+        current_time = datetime.now(timezone.utc)
+        start_time = current_time - timedelta(days=self._days_ago)
+        total_result = 0
+        
+        if not self._export_list_mssp:
+            self.logger.error("No export_list_mssp found for MSSP search")
+            return total_result
+        
+        for group, info in self._export_list_mssp.items():
+            workspace_id = info.get('workspace_id')
+            workspace_name = info.get('workspace_name')
+            customer_name = info.get('customer_name')
+            customer_filter_dir = info.get('customer_filters_directory')
+            
+            self.logger.debug(f"Searching rule on workspace {workspace_name} from group id {group}")
+            
+            # Re-convert rule with customer-specific filters if available
+            customer_rule_converted = rule_converted
+            if customer_filter_dir and self._convert_rule_callback:
+                self.logger.info(
+                    f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}"
+                )
+                try:
+                    customer_rule_converted = self._convert_rule_callback(
+                        rule_content, rule_file, self, customer_filter_dir
+                    )
+                    self.logger.debug(f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}")
+                except Exception as e:
+                    self.logger.warning(
+                        f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
+                    )
+            
+            try:
+                # Get credentials for the specific tenant
+                credential = self.get_credentials(scope="api.loganalytics.io")
+                client = LogsQueryClient(credential)
+                
+                self.logger.debug(f"Searching rule {rule_file} for '{customer_name or workspace_name}' with query: {customer_rule_converted}")
+                
+                results = client.query_workspace(
+                    workspace_id,
+                    customer_rule_converted,
+                    timespan=(start_time, current_time),
+                    server_timeout=self._timeout
+                )
+                
+                if results.status == LogsQueryStatus.SUCCESS:
+                    result = sum(len(table.rows) for table in results.tables)
+                    if result > 0:
+                        self.logger.warning(f"(Sentinel MSSP) Results for {customer_name or workspace_name}: {result}, {rule_file}")
+                    else:
+                        self.logger.info(f"(Sentinel MSSP) No results for {customer_name or workspace_name}, {rule_file}")
+                    total_result += result
+                elif results.status == LogsQueryStatus.PARTIAL:
+                    self.logger.error(f"Rule {rule_file} partial error for {customer_name or workspace_name}: {results.partial_error}")
+                    
+            except Exception as e:
+                self.logger.error(f"Could not search rule {rule_file} for workspace {workspace_name}: {e}")
+        
+        return total_result
+
     def run_sentinel_search(self, rule_converted, rule_file, mssp_mode):
 
         current_time = datetime.now(timezone.utc)
@@ -397,6 +475,8 @@ class SentinelPlatform(AbstractPlatform):
                 except HttpResponseError as e:
                     self.logger.error(f"Error while connecting to Azure error: {e}")
 
+                self.logger.debug(f"Searching rule {rule_file} with query: {rule_converted}")
+                
                 results = client.query_workspace(self._workspace_id,
                                                 rule_converted,
                                                 timespan=(start_time, current_time),
@@ -646,20 +726,64 @@ class SentinelPlatform(AbstractPlatform):
                     self._tenant_id = info['tenant_id']
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
+                    customer_name = info.get('customer_name')
+                    customer_filter_dir = info.get('customer_filters_directory')
 
                     self.logger.debug(f"Exporting to {workspace_name} from group id {group}")
+
+                    # Check for customer-specific filters and re-convert rule if needed
+                    customer_rule_converted = rule_converted
+                    customer_alert_rule = alert_rule
+
+                    if customer_filter_dir and self._convert_rule_callback:
+                        self.logger.info(
+                            f"Re-converting rule with customer-specific filters for '{customer_name}' from {customer_filter_dir}"
+                        )
+                        try:
+                            customer_rule_converted = self._convert_rule_callback(
+                                rule_content, rule_file, self, customer_filter_dir
+                            )
+                            # Create a copy of alert_rule with the customer-specific query
+                            customer_alert_rule = ScheduledAlertRule(
+                                query=customer_rule_converted,
+                                description=rule_content['description'],
+                                display_name=display_name,
+                                severity=severity,
+                                query_frequency=alert_rule.query_frequency,
+                                query_period=alert_rule.query_period,
+                                trigger_operator=alert_rule.trigger_operator,
+                                trigger_threshold=alert_rule.trigger_threshold,
+                                enabled=alert_rule.enabled,
+                                suppression_duration=alert_rule.suppression_duration,
+                                suppression_enabled=alert_rule.suppression_enabled,
+                                event_grouping_settings=alert_rule.event_grouping_settings,
+                                incident_configuration=alert_rule.incident_configuration,
+                                tactics=alert_rule.tactics,
+                                entity_mappings=alert_rule.entity_mappings,
+                                sentinel_entities_mappings=alert_rule.sentinel_entities_mappings,
+                                techniques=alert_rule.techniques
+                            )
+                            self.logger.debug(
+                                f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
+                            )
 
                     credential = self.get_credentials()
 
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
 
+                    self.logger.debug(f"Exporting rule {rule_file} to '{customer_name or workspace_name}' with query: {customer_rule_converted}")
+                    
                     try:
                         client.alert_rules.create_or_update(
                             resource_group_name=resource_group_name,
                             workspace_name=workspace_name,
                             rule_id=rule_content['id'],
-                            alert_rule=alert_rule
+                            alert_rule=customer_alert_rule
                         )
                         self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
                     except Exception as e:
@@ -673,6 +797,9 @@ class SentinelPlatform(AbstractPlatform):
         else:
             credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
+            
+            self.logger.debug(f"Exporting rule {rule_file} with query: {rule_converted}")
+            
             try:
                 client.alert_rules.create_or_update(
                     resource_group_name=self._resource_group,
@@ -684,4 +811,3 @@ class SentinelPlatform(AbstractPlatform):
             except Exception as e:
                 self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
                 raise
-
