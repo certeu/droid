@@ -62,7 +62,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self._client_secret = self._parameters["client_secret"]
             self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (self._parameters["search_auth"] or self._parameters["export_auth"]):
-            pass
+            # tenant_id is still required for API calls and token caching even with default auth
+            self._tenant_id = self._parameters["tenant_id"]
         else:
             raise Exception('MicrosoftXDRPlatform: "search_auth" and "export_auth" parameters must be one of "default" or "app" or "credential_file".')
         if "alert_prefix" in self._parameters:
@@ -115,7 +116,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.error(
                     f"Error while running the query {results['error']['message']}"
                 )
-                raise
+                raise Exception(results['error']['message'])
             else:
                 return len(results["results"])
         except Exception as e:
