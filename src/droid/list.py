@@ -93,3 +93,12 @@ def list_keys(parameters, logger_param) -> None:
         pipeline_resolver = plugins.get_pipeline_resolver()
         pipeline_list = list(pipeline_resolver.pipelines.keys())
         print(*pipeline_list, sep='\n')
+
+    elif 'validators' in parameters.list:
+        plugins = InstalledSigmaPlugins.autodiscover()
+        validators = plugins.validators
+        if validators:
+            validator_names = list(validators.keys())
+            print(*sorted(validator_names), sep='\n')
+        else:
+            print("No validators found in installed pySigma plugins")
