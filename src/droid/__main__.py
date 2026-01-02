@@ -42,7 +42,7 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument("-p", "--platform", help="Platform target", choices=["splunk", "microsoft_sentinel", "microsoft_xdr", "esql", "eql"])
     parser.add_argument("-sx", "--sentinel-xdr", help="Use Microsoft Sentinel as a search head for Microsoft XDR", action="store_true")
     parser.add_argument("-u", "--update", help="Update from source", choices=["sigmahq-core"])
-    parser.add_argument("-l", "--list", help="List items from rules", choices=["unique_fields", "pipelines"])
+    parser.add_argument("-l", "--list", help="List items from rules", choices=["unique_fields", "pipelines", "validators"])
     parser.add_argument("-m", "--mssp", help="Enable MSSP mode", action="store_true")
     parser.add_argument("-mo", "--module", help="Module mode to return converted rules as a list", action="store_true")
     parser.add_argument("-j", "--json", help="Drop a JSON log file", action="store_true")

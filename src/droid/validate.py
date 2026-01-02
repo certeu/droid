@@ -21,12 +21,48 @@ class SigmaValidation:
 
         self.logger.debug("Initializing droid.validate.SigmaValidation")
 
-    def validators(self) -> None:
-        return InstalledSigmaPlugins.autodiscover().validators
+    def get_installed_validators(self) -> dict:
+        """Get all installed validators from pySigma plugins.
+        
+        This method autodiscovers validators from installed pySigma plugins,
+        similar to how backends and pipelines are discovered.
+        
+        Returns:
+            dict: A dictionary of validator names to validator classes.
+        """
+        plugins = InstalledSigmaPlugins.autodiscover()
+        validators = plugins.validators
+        self.logger.debug(f"Discovered {len(validators)} validators from installed plugins")
+        return validators
+
+    def list_validators(self) -> list:
+        """List all available validator names.
+        
+        Returns:
+            list: A list of validator names.
+        """
+        validators = self.get_installed_validators()
+        validator_names = list(validators.keys())
+        self.logger.debug(f"Available validators: {validator_names}")
+        return validator_names
 
     def init_validator(self) -> None:
+        """Initialize the SigmaValidator with installed validators.
+        
+        Loads the validation configuration from the YAML file and initializes
+        the SigmaValidator with all autodiscovered validators from pySigma plugins.
+        """
+        validators = self.get_installed_validators()
+        
+        if validators:
+            self.logger.info(f"Loaded {len(validators)} validators from installed pySigma plugins")
+            for validator_name in validators:
+                self.logger.debug(f"  - {validator_name}")
+        else:
+            self.logger.warning("No validators discovered from installed pySigma plugins")
+        
         with open(self._validation_config_path) as validation_config:
-            self._rule_validator = SigmaValidator.from_yaml(validation_config.read(), self.validators())
+            self._rule_validator = SigmaValidator.from_yaml(validation_config.read(), validators)
 
     def init_sigma_rule(self, rule, rule_file) -> None:
         try:
