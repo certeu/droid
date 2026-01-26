@@ -26,8 +26,8 @@ jobs:
         apt update
         pip install -r requirements.txt
         pip install -r requirements-qa.txt
-        pip install pysigma-backend-splunk>=1.1.0
-        pip install pysigma-backend-kusto>=1.0.0
+        pip install pysigma-backend-splunk
+        pip install pysigma-backend-kusto
 
     - name: Run tests
       run: |
