@@ -676,6 +676,11 @@ class SentinelPlatform(AbstractPlatform):
                     lookback_duration=timedelta(hours=self._grouping_period),
                     matching_method=self._grouping_method
                 )
+                if rule_content.get("custom", {}).get("grouping_period"):
+                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
+                if rule_content.get("custom", {}).get("grouping_matching_entities"):
+                    grouping_config.matching_method = "Selected"
+                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
             else:
                 grouping_config = None
         else:
@@ -687,6 +692,11 @@ class SentinelPlatform(AbstractPlatform):
                     lookback_duration=timedelta(hours=self._grouping_period),
                     matching_method=self._grouping_method
                 )
+                if rule_content.get("custom", {}).get("grouping_period"):
+                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
+                if rule_content.get("custom", {}).get("grouping_matching_entities"):
+                    grouping_config.matching_method = "Selected"
+                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
             else:
                 grouping_config = None
 
