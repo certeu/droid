@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: python:3.11.6-slim-bookworm
+      image: python:3.11.8-slim-bookworm
 
     steps:
     - name: Checkout repository
