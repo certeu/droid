@@ -124,6 +124,32 @@ class Conversion:
 
         return sigma_rule
 
+    @staticmethod
+    def _rule_has_regex_modifier(rule_content) -> bool:
+        """Check if a Sigma rule uses the |re (regex) modifier in its detection section.
+
+        Args:
+            rule_content: The parsed rule content dictionary
+
+        Returns:
+            True if any detection field uses the |re modifier
+        """
+        detection = rule_content.get("detection", {})
+        if not isinstance(detection, dict):
+            return False
+        for key, value in detection.items():
+            if key == "condition":
+                continue
+            if isinstance(value, dict):
+                if any("|re" in field_key for field_key in value):
+                    return True
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        if any("|re" in field_key for field_key in item):
+                            return True
+        return False
+
     def convert_rule(self, rule_content, rule_file, platform, customer_filter_directory: Optional[str] = None):
         """Convert a Sigma rule to the target platform query language
 
@@ -157,6 +183,19 @@ class Conversion:
             rule_supported = False
 
         if rule_supported:
+            # Check for incompatible combination: Splunk datamodel format with regex modifiers
+            if (self._platform_name == "splunk"
+                    and self._format == "data_model"
+                    and self._rule_has_regex_modifier(rule_content)):
+                self.logger.warning(
+                    f"Rule not compatible: {rule_file} - "
+                    "Splunk datamodel format does not support the |re (regex) modifier. "
+                    "Use a different output format or remove the regex modifier from the rule.",
+                    # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/60
+                    extra={"rule_file": rule_file, "rule_content": rule_content}
+                )
+                return None
+
             backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
             if pipeline_config:
                 pipeline = pipeline_resolver.resolve(pipeline_config)
