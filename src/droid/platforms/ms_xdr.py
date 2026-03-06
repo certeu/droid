@@ -75,7 +75,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Conversion callback for re-converting rules with customer-specific filters
         self._convert_rule_callback: Optional[Callable] = None
         
-        self._api_base_url = "https://graph.microsoft.com/beta"
+        self._api_base_url = "https://graph.microsoft.com/v1.0"
         self._token_cache = {}
 
     def set_convert_rule_callback(self, callback: Callable) -> None:
