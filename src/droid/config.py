@@ -143,166 +143,84 @@ def load_base_config(config_path: str) -> dict:
 
 def is_raw_rule(parameters, base_config: dict) -> bool:
     """Return *True* when the rule path points to raw (non-Sigma) rules."""
+    from droid.platforms.registry import PLATFORM_REGISTRY
+
     if "raw_rules_directory" not in base_config:
         return False
 
-    try:
-        raw_rule_folder_name = base_config["raw_rules_directory"]
-    except Exception as e:
-        print(f"Could not read the key raw_rule_folder_name from the DROID configuration: {e}")
-        exit(1)
+    raw_dir = base_config["raw_rules_directory"]
+    platform_name = parameters.platform
 
-    platform = parameters.platform
-
-    if (
-        platform in ["splunk", "microsoft_sentinel"]
-        and raw_rule_folder_name in parameters.rules
-        and platform in parameters.rules
-    ):
-        return True
-    elif platform in ["esql", "eql"] and raw_rule_folder_name in parameters.rules:
-        return True
-    elif platform in ["esql", "eql"]:
-        return False
-    elif platform == "microsoft_xdr" and raw_rule_folder_name in parameters.rules:
-        return True
-    elif platform in ["splunk", "microsoft_sentinel"] or platform == "microsoft_xdr":
-        return False
-    elif raw_rule_folder_name in parameters.rules and (
-        getattr(parameters, "validate", False) or getattr(parameters, "convert", False)
-    ):
-        return True
-    elif raw_rule_folder_name not in parameters.rules and (
-        getattr(parameters, "validate", False) or getattr(parameters, "convert", False)
-    ):
-        return False
-    else:
+    if platform_name not in PLATFORM_REGISTRY:
+        # No platform selected — validate/convert mode
+        if raw_dir in parameters.rules and (
+            getattr(parameters, "validate", False) or getattr(parameters, "convert", False)
+        ):
+            return True
+        if raw_dir not in parameters.rules and (
+            getattr(parameters, "validate", False) or getattr(parameters, "convert", False)
+        ):
+            return False
         print("Please select a platform.")
         exit(1)
+
+    strategy = PLATFORM_REGISTRY[platform_name].raw_rule_strategy
+    if strategy.never_raw:
+        return False
+    if raw_dir not in parameters.rules:
+        return False
+    if strategy.require_platform_in_path:
+        return platform_name in parameters.rules
+    return True
 
 
 def load_platform_config(parameters, config_path: str) -> dict:
     """Load the platform-specific configuration section.
 
-    Port of the original ``droid_platform_config`` from ``__main__``.
+    Driven by the platform descriptor registry — no per-platform branching.
     """
+    from droid.platforms.registry import PLATFORM_REGISTRY
+
     if (getattr(parameters, "convert", False) or getattr(parameters, "export", False)) and not parameters.platform:
         exit("Please select one target platform. Use --help")
 
-    if parameters.platform == "splunk":
-        try:
-            with open(config_path) as file_obj:
-                content = file_obj.read()
-                config_data = tomllib.loads(content)
-                config_splunk = config_data["platforms"]["splunk"]
-        except Exception as e:
-            raise Exception(f"Something unexpected happened: {e}")
+    platform_name = parameters.platform
+    if platform_name not in PLATFORM_REGISTRY:
+        return {}
 
-        if getattr(parameters, "export", False) or getattr(parameters, "search", False) or getattr(parameters, "integrity", False):
-            if environ.get("DROID_SPLUNK_USER"):
-                config_splunk["user"] = environ.get("DROID_SPLUNK_USER")
-            else:
-                raise Exception("Please use: export DROID_SPLUNK_USER=<user>")
+    descriptor = PLATFORM_REGISTRY[platform_name]
 
-            if environ.get("DROID_SPLUNK_PASSWORD"):
-                config_splunk["password"] = environ.get("DROID_SPLUNK_PASSWORD")
-            else:
-                raise Exception("Please use: export DROID_SPLUNK_PASSWORD=<password>")
+    try:
+        with open(config_path) as fh:
+            full_toml = tomllib.loads(fh.read())
+    except Exception as e:
+        raise Exception(f"Could not load config file: {e}")
 
-            if environ.get("DROID_SPLUNK_URL"):
-                config_splunk["url"] = environ.get("DROID_SPLUNK_URL")
+    toml_key = descriptor.resolve_toml_key(parameters)
+    try:
+        config = full_toml["platforms"][toml_key]
+    except KeyError:
+        raise Exception(f"Missing [platforms.{toml_key}] section in config file")
 
-            if environ.get("DROID_SPLUNK_WEBHOOK_URL"):
-                config_splunk["action"]["action.webhook.param.url"] = environ.get("DROID_SPLUNK_WEBHOOK_URL")
+    if descriptor.post_load_transform:
+        config = descriptor.post_load_transform(config, full_toml, parameters)
 
-        return config_splunk
-
-    if parameters.platform in ("microsoft_sentinel", "microsoft_xdr"):
-        try:
-            with open(config_path) as file_obj:
-                content = file_obj.read()
-                config_data = tomllib.loads(content)
-                if parameters.platform == "microsoft_xdr" and getattr(parameters, "sentinel_xdr", False):
-                    config = config_data["platforms"]["microsoft_sentinel"]
-                    config["pipelines"] = config_data["platforms"]["microsoft_xdr"]["pipelines"]
+    for group in descriptor.env_var_groups:
+        if group.condition is not None and not group.condition(config, parameters):
+            continue
+        for mapping in group.mappings:
+            value = environ.get(mapping.env_var)
+            if value:
+                if mapping.nested_key:
+                    config.setdefault(mapping.nested_key, {})[mapping.config_key] = value
                 else:
-                    config = config_data["platforms"][parameters.platform]
+                    config[mapping.config_key] = value
+            elif mapping.required:
+                raise Exception(f"Please use: export {mapping.env_var}=<value>")
+            elif mapping.default is not None:
+                config[mapping.config_key] = mapping.default
 
-                if environ.get("DROID_AZURE_WORKSPACE_ID"):
-                    config["workspace_id"] = environ.get("DROID_AZURE_WORKSPACE_ID")
-                if environ.get("DROID_AZURE_WORKSPACE_NAME"):
-                    config["workspace_name"] = environ.get("DROID_AZURE_WORKSPACE_NAME")
-                if environ.get("DROID_AZURE_SUBSCRIPTION_ID"):
-                    config["subscription_id"] = environ.get("DROID_AZURE_SUBSCRIPTION_ID")
-                if environ.get("DROID_AZURE_RESOURCE_GROUP"):
-                    config["resource_group"] = environ.get("DROID_AZURE_RESOURCE_GROUP")
-        except Exception:
-            raise Exception("Something unexpected happened...")
+    if descriptor.post_load_validator:
+        descriptor.post_load_validator(config, parameters)
 
-        if getattr(parameters, "export", False) or getattr(parameters, "search", False) or getattr(parameters, "integrity", False):
-            auth_methods = ["default", "app"]
-
-            if environ.get("DROID_AZURE_SEARCH_AUTH"):
-                config["search_auth"] = environ.get("DROID_AZURE_SEARCH_AUTH")
-
-            if environ.get("DROID_AZURE_EXPORT_AUTH"):
-                config["export_auth"] = environ.get("DROID_AZURE_EXPORT_AUTH")
-
-            if "search_auth" in config and config["search_auth"] not in auth_methods:
-                raise ValueError(f"Invalid search_auth: {config['search_auth']}")
-
-            if "export_auth" in config and config["export_auth"] not in auth_methods:
-                raise ValueError(f"Invalid export_auth: {config['export_auth']}")
-
-            if (
-                config["search_auth"] == "app" and "credential_file" not in config
-            ) or (
-                config["export_auth"] == "app"
-                and getattr(parameters, "export", False)
-                and "credential_file" not in config
-            ):
-                if environ.get("DROID_AZURE_TENANT_ID"):
-                    config["tenant_id"] = environ.get("DROID_AZURE_TENANT_ID")
-                else:
-                    raise Exception("Please use: export DROID_AZURE_TENANT_ID=<tenant_id>")
-
-                if environ.get("DROID_AZURE_CLIENT_ID"):
-                    config["client_id"] = environ.get("DROID_AZURE_CLIENT_ID")
-                else:
-                    raise Exception("Please use: export DROID_AZURE_CLIENT_ID=<client_id>")
-
-                if environ.get("DROID_AZURE_CLIENT_SECRET"):
-                    config["client_secret"] = environ.get("DROID_AZURE_CLIENT_SECRET")
-                else:
-                    raise Exception("Please use: export DROID_AZURE_CLIENT_SECRET=<client_secret>")
-
-                if environ.get("DROID_AZURE_CERT_PASS"):
-                    config["cert_pass"] = environ.get("DROID_AZURE_CERT_PASS")
-                else:
-                    config["cert_pass"] = None
-
-        return config
-
-    if parameters.platform in ("esql", "eql"):
-        try:
-            with open(config_path) as file_obj:
-                content = file_obj.read()
-                config_data = tomllib.loads(content)
-                config_elastic = config_data["platforms"]["elastic"]
-        except Exception as e:
-            raise Exception(f"Something unexpected happened: {e}")
-
-        if config_elastic["auth_method"] == "basic":
-            if getattr(parameters, "export", False) or getattr(parameters, "search", False) or getattr(parameters, "integrity", False):
-                if environ.get("DROID_ELASTIC_USERNAME"):
-                    config_elastic["username"] = environ.get("DROID_ELASTIC_USERNAME")
-                else:
-                    raise Exception("Please use: export DROID_ELASTIC_USERNAME=<username>")
-                if environ.get("DROID_ELASTIC_PASSWORD"):
-                    config_elastic["password"] = environ.get("DROID_ELASTIC_PASSWORD")
-                else:
-                    raise Exception("Please use: export DROID_ELASTIC_PASSWORD=<password>")
-
-        return config_elastic
-
-    return {}
+    return config

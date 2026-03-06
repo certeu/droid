@@ -13,10 +13,8 @@ from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from droid.search import search_rule
 from droid.export import export_rule
 from droid.integrity import integrity_rule
-from droid.platforms.splunk import SplunkPlatform
-from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform
-from droid.platforms.ms_xdr import MicrosoftXDRPlatform
+from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 
 class Conversion:
@@ -342,43 +340,13 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
     if parameters.platform and (parameters.search or parameters.export or parameters.integrity):
         platform_name = parameters.platform
         target = Conversion(droid_config, base_config, platform_name, logger_param)
-        if platform_name == "splunk":
-            platform = SplunkPlatform(droid_config, logger_param)
-        elif "esql" in platform_name:
-            platform = ElasticPlatform(droid_config, logger_param, "esql", raw=False)
-        elif "eql" in platform_name:
-            platform = ElasticPlatform(droid_config, logger_param, "eql", raw=False)
-        elif "microsoft_sentinel" in platform_name and parameters.mssp:
-            platform = SentinelPlatform(droid_config, logger_param, export_mssp=True)
-            # Set up callback for customer-specific filter conversion
-            # The callback receives customer_filter_directory directly from export_list_mssp
+        platform = get_platform(parameters, droid_config, logger_param, raw=False)
+        if parameters.mssp and hasattr(platform, "set_convert_rule_callback"):
             platform.set_convert_rule_callback(
                 lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
                     rule_content, rule_file, plat, customer_filter_dir
                 )
             )
-        elif "microsoft_sentinel" in platform_name:
-            platform = SentinelPlatform(droid_config, logger_param, export_mssp=False)
-        elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr and parameters.mssp:
-            platform = SentinelPlatform(droid_config, logger_param, export_mssp=True)
-            # Set up callback for customer-specific filter conversion
-            platform.set_convert_rule_callback(
-                lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
-                    rule_content, rule_file, plat, customer_filter_dir
-                )
-            )
-        elif "microsoft_xdr" in platform_name and parameters.sentinel_xdr:
-            platform = SentinelPlatform(droid_config, logger_param, export_mssp=False)
-        elif "microsoft_xdr" in platform_name and parameters.mssp:
-            platform = MicrosoftXDRPlatform(droid_config, logger_param, export_mssp=True)
-            # Set up callback for customer-specific filter conversion
-            platform.set_convert_rule_callback(
-                lambda rule_content, rule_file, plat, customer_filter_dir: target.convert_rule(
-                    rule_content, rule_file, plat, customer_filter_dir
-                )
-            )
-        elif "microsoft_xdr" in platform_name:
-            platform = MicrosoftXDRPlatform(droid_config, logger_param, export_mssp=False)
 
     if path.is_dir():
         error_i = False

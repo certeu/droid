@@ -1,15 +1,22 @@
 """
 Module handling the searches in platform
 """
+from __future__ import annotations
+
 import yaml
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 from rich import print
-from droid.platforms.splunk import SplunkPlatform
-from droid.platforms.sentinel import SentinelPlatform
-from droid.platforms.elastic import ElasticPlatform
-from droid.platforms.ms_xdr import MicrosoftXDRPlatform
+from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
+
+if TYPE_CHECKING:
+    from droid.platforms.splunk import SplunkPlatform
+    from droid.platforms.sentinel import SentinelPlatform
+    from droid.platforms.elastic import ElasticPlatform
+    from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 
 def load_rule(rule_file):
 
@@ -213,22 +220,7 @@ def search_rule_raw(parameters: dict, export_config: dict, logger_param: dict):
 
     path = Path(parameters.rules)
 
-    if parameters.platform == "splunk":
-        platform = SplunkPlatform(export_config, logger_param)
-    elif parameters.platform == "esql" or parameters.platform == "eql":
-        platform = ElasticPlatform(export_config, logger_param, parameters.platform, raw=True)
-    elif parameters.platform == "microsoft_sentinel" and parameters.mssp:
-        platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
-    elif parameters.platform == "microsoft_sentinel":
-        platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
-    elif "microsoft_xdr" in parameters.platform and parameters.sentinel_xdr and parameters.mssp:
-        platform = SentinelPlatform(export_config, logger_param, export_mssp=True)
-    elif "microsoft_xdr" in parameters.platform and parameters.sentinel_xdr:
-        platform = SentinelPlatform(export_config, logger_param, export_mssp=False)
-    elif parameters.platform == "microsoft_xdr" and parameters.mssp:
-        platform = MicrosoftXDRPlatform(export_config, logger_param, export_mssp=True)
-    elif parameters.platform == "microsoft_xdr":
-        platform = MicrosoftXDRPlatform(export_config, logger_param, export_mssp=False)
+    platform = get_platform(parameters, export_config, logger_param, raw=True)
 
     if path.is_dir():
         error_i = False
