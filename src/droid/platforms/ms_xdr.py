@@ -778,7 +778,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     raise
         return impactedAssetsList
 
-    def _acquire_token_from_hook(self, hook_url, tenant_id=None, max_retries=3, retry_delay=5):
+    def _acquire_token_from_hook(self, hook_url, tenant_id=None, max_retries=5, retry_delay=10):
         if not tenant_id:
             tenant_id = self._tenant_id
 
@@ -838,7 +838,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.error(f"Failed to acquire token from custom hook after {max_retries} attempts")
                     raise Exception(f"Token acquisition from custom hook failed: {str(e)}")
 
-    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60, max_retries=5):
+    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5):
         api_url = self._api_base_url + url
 
         # Check if the token is about to expire or has expired for the tenant
