@@ -5,6 +5,7 @@ import yaml
 
 from os import environ
 from pathlib import Path
+from rich import print
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform

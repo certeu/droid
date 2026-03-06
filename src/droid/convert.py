@@ -5,6 +5,7 @@ import yaml
 
 from pathlib import Path
 from typing import Optional
+from rich import print
 from sigma.plugins import InstalledSigmaPlugins
 from sigma.conversion.base import Backend, SigmaCollection
 from sigma.exceptions import SigmaTransformationError

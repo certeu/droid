@@ -1,14 +1,15 @@
 """
-Tests of the --export option
+Tests of the export command
 """
 
 import pytest
 
-from droid.__main__ import main
+from typer.testing import CliRunner
+from droid.__main__ import app
+
+runner = CliRunner()
 
 def test_check():
     """Simply test --help of droid"""
-    with pytest.raises(SystemExit) as error:
-        main(["--help"])
-    assert error.type == SystemExit
-    assert error.value.code == 0
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0

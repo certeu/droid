@@ -4,6 +4,7 @@ Module handling the searches in platform
 import yaml
 
 from pathlib import Path
+from rich import print
 from droid.platforms.splunk import SplunkPlatform
 from droid.platforms.sentinel import SentinelPlatform
 from droid.platforms.elastic import ElasticPlatform

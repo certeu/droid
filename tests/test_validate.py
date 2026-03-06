@@ -1,26 +1,23 @@
 """
-Tests of the --validate option
+Tests of the validate command
 """
 
 import pytest
 
-from droid.__main__ import main
+from typer.testing import CliRunner
+from droid.__main__ import app
+
+runner = CliRunner()
 
 def test_check():
     """Simply test --help of droid"""
-    with pytest.raises(SystemExit) as error:
-        main(["--help"])
-    assert error.type == SystemExit
-    assert error.value.code == 0
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
 
 def test_validate_valid_file():
-    with pytest.raises(SystemExit) as error:
-       main(["--validate", "--rules", "tests/files/sigma-rules/valid/valid_rule.yml", "--config-file", "tests/files/test_config.toml"])
-    assert error.type == SystemExit
-    assert error.value.code == 0
+    result = runner.invoke(app, ["rules", "validate", "--rules", "tests/files/sigma-rules/valid/valid_rule.yml", "--config-file", "tests/files/test_config.toml"])
+    assert result.exit_code == 0
 
 def test_validate_invalid_file():
-    with pytest.raises(SystemExit) as error:
-        main(["--validate", "--rules", "tests/files/sigma-rules/invalid/invalid_rule.yml", "--config-file", "tests/files/test_config.toml"])
-    assert error.type == SystemExit
-    assert error.value.code == 1
+    result = runner.invoke(app, ["rules", "validate", "--rules", "tests/files/sigma-rules/invalid/invalid_rule.yml", "--config-file", "tests/files/test_config.toml"])
+    assert result.exit_code == 1
