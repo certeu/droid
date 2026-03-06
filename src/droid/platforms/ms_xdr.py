@@ -75,7 +75,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Conversion callback for re-converting rules with customer-specific filters
         self._convert_rule_callback: Optional[Callable] = None
         
-        self._api_base_url = "https://graph.microsoft.com/v1.0"
+        self._api_base_url = "https://graph.microsoft.com/beta"
         self._token_cache = {}
 
     def set_convert_rule_callback(self, callback: Callable) -> None:
@@ -840,6 +840,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
     def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5):
         api_url = self._api_base_url + url
+
+        if not tenant_id:
+            tenant_id = self._tenant_id
 
         # Check if the token is about to expire or has expired for the tenant
         if tenant_id not in self._token_cache or datetime.now() >= self._token_cache[tenant_id][1]:
