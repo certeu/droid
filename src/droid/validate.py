@@ -4,6 +4,7 @@ Module to validate the detection rules
 import yaml
 
 from pathlib import Path
+from rich import print
 from sigma.rule import SigmaRule
 from sigma.validation import SigmaValidator
 from sigma.plugins import InstalledSigmaPlugins

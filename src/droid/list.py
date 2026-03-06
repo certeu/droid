@@ -4,6 +4,7 @@ Module to list items from the detection rules
 import yaml
 
 from pathlib import Path
+from rich import print
 from sigma.plugins import InstalledSigmaPlugins
 from droid.color import ColorLogger
 
