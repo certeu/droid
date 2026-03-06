@@ -800,8 +800,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         for attempt in range(max_retries):
             try:
-                response = requests.get(hook_url, timeout=120, headers=headers)
-                self.logger.debug("Requested token to URL hook")
+                self.logger.debug(f"Requesting token from URL hook (attempt {attempt + 1}/{max_retries})")
+                response = requests.get(hook_url, timeout=(10, 30), headers=headers)
+                self.logger.debug(f"Token hook responded with status {response.status_code}")
                 response.raise_for_status()
                 token_data = response.json()
                 token = token_data.get("access_token")
@@ -812,9 +813,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
                 # Store the token and its expiration time in the cache
                 self._token_cache[tenant_id] = (token, expiration)
+                self.logger.debug("Successfully acquired token from hook")
                 return token, expiration
+            except requests.exceptions.ConnectTimeout:
+                self.logger.error(f"Attempt {attempt + 1}/{max_retries}: connection to token hook timed out")
+                if attempt < max_retries - 1:
+                    self.logger.debug(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    raise Exception("Token hook unreachable: connection timed out after all retries")
+            except requests.exceptions.ReadTimeout:
+                self.logger.error(f"Attempt {attempt + 1}/{max_retries}: token hook did not respond in time (read timeout)")
+                if attempt < max_retries - 1:
+                    self.logger.debug(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    raise Exception("Token hook unresponsive: read timed out after all retries")
             except requests.exceptions.RequestException as e:
-                self.logger.error(f"Attempt {attempt + 1} failed to acquire token from custom hook: {str(e)}")
+                self.logger.error(f"Attempt {attempt + 1}/{max_retries} failed to acquire token from custom hook: {str(e)}")
                 if attempt < max_retries - 1:
                     self.logger.debug(f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
@@ -822,7 +838,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.error(f"Failed to acquire token from custom hook after {max_retries} attempts")
                     raise Exception(f"Token acquisition from custom hook failed: {str(e)}")
 
-    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
+    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60, max_retries=5):
         api_url = self._api_base_url + url
 
         # Check if the token is about to expire or has expired for the tenant
@@ -832,23 +848,26 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self._token_cache[tenant_id] = (token, expiration)
 
         token, _ = self._token_cache[tenant_id]
-        headers = {
+        request_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         if headers:
-            headers.update(headers)
+            request_headers.update(headers)
 
-        while True:
+        attempt = 0
+        token_refreshed = False
+        while attempt < max_retries:
             try:
+                self.logger.debug(f"{method} {api_url} (attempt {attempt + 1}/{max_retries})")
                 if method == "GET":
-                    response = requests.get(api_url, headers=headers, params=params, timeout=timeout)
+                    response = requests.get(api_url, headers=request_headers, params=params, timeout=timeout)
                 elif method == "POST":
-                    response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+                    response = requests.post(api_url, headers=request_headers, json=payload, timeout=timeout)
                 elif method == "PATCH":
-                    response = requests.patch(api_url, headers=headers, json=payload, timeout=timeout)
+                    response = requests.patch(api_url, headers=request_headers, json=payload, timeout=timeout)
                 elif method == "DELETE":
-                    response = requests.delete(api_url, headers=headers, params=params, timeout=timeout)
+                    response = requests.delete(api_url, headers=request_headers, params=params, timeout=timeout)
                 else:
                     self.logger.error(f"Unsupported HTTP method: {method}")
                     return None, 500
@@ -856,24 +875,37 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 if response.status_code == 204:
                     return {}, response.status_code
                 elif response.status_code == 429:
-                    self.logger.warning(f"Rate limit reached, retrying in {retry_delay} seconds")
+                    attempt += 1
+                    self.logger.warning(f"Rate limit reached, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
                     time.sleep(retry_delay)
                 elif 500 <= response.status_code < 600:
-                    self.logger.warning(f"Server error {response.status_code}, retrying in {retry_delay} seconds")
+                    attempt += 1
+                    self.logger.warning(f"Server error {response.status_code}, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
                     time.sleep(retry_delay)
-                elif response.status_code == 401:
+                elif response.status_code == 401 and not token_refreshed:
                     self.logger.warning(f"Token expired for tenant {tenant_id}, refreshing token")
                     token, expiration = self.acquire_token(tenant_id)
                     self._token_cache[tenant_id] = (token, expiration)
-                    headers["Authorization"] = f"Bearer {token}"
+                    request_headers["Authorization"] = f"Bearer {token}"
+                    token_refreshed = True  # only refresh once to avoid infinite loop
                 else:
                     return response.json(), response.status_code
             except requests.exceptions.Timeout:
-                self.logger.warning(f"{method} request timed out after {timeout} seconds")
-                time.sleep(retry_delay)
+                attempt += 1
+                self.logger.warning(f"{method} {api_url} timed out after {timeout}s (attempt {attempt}/{max_retries})")
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+            except requests.exceptions.ConnectionError as e:
+                attempt += 1
+                self.logger.error(f"{method} {api_url} connection error (attempt {attempt}/{max_retries}): {str(e)}")
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"An error occurred: {str(e)}")
                 return None, 500
+
+        self.logger.error(f"{method} {api_url} failed after {max_retries} attempts, giving up")
+        raise Exception(f"Graph API request failed after {max_retries} attempts: {method} {url}")
 
     def _get(self, url=None, headers=None, params=None, tenant_id=None, timeout=120, retry_delay=60):
         return self._request_with_retries(
