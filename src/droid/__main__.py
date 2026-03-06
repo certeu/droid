@@ -3,6 +3,7 @@ Main class
 """
 
 import importlib
+import importlib.metadata
 import pkgutil
 import sys
 from typing import Optional
@@ -16,6 +17,23 @@ app = typer.Typer(
     help="Detection Rules Optimization Integration Deployment",
     add_completion=False,
 )
+
+# ---------------------------------------------------------------------------
+# Top-level commands
+# ---------------------------------------------------------------------------
+
+@app.command()
+def version() -> None:
+    """Show the current version of droid."""
+    try:
+        v = importlib.metadata.version("detect-droid")
+    except importlib.metadata.PackageNotFoundError:
+        import configparser, pathlib
+        cfg = configparser.ConfigParser()
+        cfg.read(pathlib.Path(__file__).resolve().parents[2] / "setup.cfg")
+        v = cfg.get("metadata", "version", fallback="unknown")
+    typer.echo(f"droid {v}")
+
 
 # ---------------------------------------------------------------------------
 # Global options (shared across all sub-commands via ctx.obj)
