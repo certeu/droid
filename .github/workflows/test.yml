@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - 'src/**'
+      - setup.cfg
+      - requirements.txt
 
 jobs:
   run_tests:
