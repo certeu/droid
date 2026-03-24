@@ -44,7 +44,10 @@ class SplunkPlatform(AbstractPlatform):
         self._app = self._parameters['app']
         self._job_ttl = self._parameters['job_ttl']
         self._acl_update_owner = self._parameters['acl_update_owner']
-        self._alert_expiration = self._parameters['alert_expiration']
+        self._alert_expiration = self._parameters.get(
+            'alert_expiration',
+            self._parameters.get('savedsearch_parameters', {}).get('alert_expiration', '96h')
+        )
         self._acl_update_perms_read = self._parameters['acl_update_perms_read']
 
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
@@ -206,6 +209,8 @@ class SplunkPlatform(AbstractPlatform):
 
         if 'savedsearch_parameters' in self._parameters:
             for item in self._parameters['savedsearch_parameters']:
+                if item == 'alert_expiration':
+                    continue  # already mapped to alert.expires above
                 alert_config[item] = self._parameters['savedsearch_parameters'][item]
 
         if 'action' in self._parameters:
