@@ -49,6 +49,7 @@ class SplunkPlatform(AbstractPlatform):
             self._parameters.get('savedsearch_parameters', {}).get('alert_expiration', '96h')
         )
         self._acl_update_perms_read = self._parameters['acl_update_perms_read']
+        self._verify_cert = self._parameters.get('verify_cert', True)
 
         if 'suppress_fields_groups' in self._parameters['savedsearch_parameters']:
             self._suppress_fields_groups = self._parameters['savedsearch_parameters']['suppress_fields_groups']
@@ -60,11 +61,12 @@ class SplunkPlatform(AbstractPlatform):
         """
         try:
             service = client.connect(
-                host= self._url,
+                host=self._url,
                 port=self._port,
                 username=self._user,
                 password=self._password,
-                app=self._app)
+                app=self._app,
+                verify=self._verify_cert)
 
         except AuthenticationError:
             self.logger.error("Login failed")
@@ -125,11 +127,12 @@ class SplunkPlatform(AbstractPlatform):
         alert_name = rule_content["title"]
 
         service = client.connect(
-            host= self._url,
+            host=self._url,
             port=self._port,
             username=self._user,
             password=self._password,
-            app=self._app)
+            app=self._app,
+            verify=self._verify_cert)
 
         try:
             exists = service.saved_searches[alert_name]
@@ -142,11 +145,12 @@ class SplunkPlatform(AbstractPlatform):
         alert_name = rule_content["title"]
 
         service = client.connect(
-            host= self._url,
+            host=self._url,
             port=self._port,
             username=self._user,
             password=self._password,
-            app=self._app)
+            app=self._app,
+            verify=self._verify_cert)
 
         if self.search_savedsearch(rule_content): # If the rule already exists
             saved_search = service.saved_searches.delete(alert_name)
@@ -159,11 +163,12 @@ class SplunkPlatform(AbstractPlatform):
         alert_name = rule_content["title"]
 
         service = client.connect(
-            host= self._url,
+            host=self._url,
             port=self._port,
             username=self._user,
             password=self._password,
-            app=self._app)
+            app=self._app,
+            verify=self._verify_cert)
 
         if self.search_savedsearch(rule_content): # If the rule already exists
             return self.search_savedsearch(rule_content)
@@ -183,7 +188,8 @@ class SplunkPlatform(AbstractPlatform):
             port=self._port,
             username=self._user,
             password=self._password,
-            app=self._app
+            app=self._app,
+            verify=self._verify_cert
         )
 
         alert_config = {
