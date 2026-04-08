@@ -58,7 +58,7 @@ def search_rule_sentinel_mssp(rule_converted, rule_content, platform: SentinelPl
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0:  # If the rule has match
-            logger.warning(f"(Sentinel MSSP) Match found for {rule_file}")
+            logger.warning(f"(Sentinel MSSP) Match found for {rule_file} - {result} hit(s)")
             search_warning = True
             return error, search_warning
         else:
@@ -78,7 +78,7 @@ def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, 
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f"(Sentinel) Match found for {rule_file}")
+            logger.warning(f"(Sentinel) Match found for {rule_file} - {result} hit(s)")
             search_warning = True
             return error, search_warning
         else:
