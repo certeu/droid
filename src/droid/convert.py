@@ -404,8 +404,7 @@ def convert_sigma(
 
         logger.debug(f"Rule {rule_file} converted into:", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
         if not (parameters.export or parameters.search or parameters.integrity or parameters.module) and rule_converted:
-            for query in rule_converted:
-                sys.stdout.write(query + "\n")
+            sys.stdout.write(rule_converted + "\n")
 
     except SigmaFeatureNotSupportedByBackendError as e:
         logger.warning(f"Sigma Backend Error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
