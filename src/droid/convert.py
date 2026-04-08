@@ -1,6 +1,7 @@
 """
 Module to convert the Sigma rules
 """
+import sys
 import yaml
 
 from pathlib import Path
@@ -401,7 +402,10 @@ def convert_sigma(
     try:
         rule_converted = target.convert_rule(rule_content, rule_file, platform)
 
-        logger.debug(f"Rule {rule_file} converted into: {rule_converted}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+        logger.debug(f"Rule {rule_file} converted into:", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+        if not (parameters.export or parameters.search or parameters.integrity or parameters.module) and rule_converted:
+            for query in rule_converted:
+                sys.stdout.write(query + "\n")
 
     except SigmaFeatureNotSupportedByBackendError as e:
         logger.warning(f"Sigma Backend Error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})

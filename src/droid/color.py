@@ -54,6 +54,7 @@ class ColorLogger(logging.Logger):
                 show_path=False,
                 markup=True,
                 log_time_format="%Y-%m-%d %H:%M:%S",
+                omit_repeated_times=False,
             )
 
         # Add AzureLogFilter only when not in debug mode
