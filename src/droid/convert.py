@@ -1,6 +1,7 @@
 """
 Module to convert the Sigma rules
 """
+import sys
 import yaml
 
 from pathlib import Path
@@ -283,22 +284,24 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
                     # First show default conversion (no customer filters)
                     try:
                         default_converted = target.convert_rule(rule_content, rule_file, platform)
-                        logger.info(f"  [DEFAULT] {default_converted}")
+                        logger.info("  [DEFAULT]")
+                        sys.stdout.write(default_converted + "\n")
                     except Exception as e:
                         logger.error(f"  [DEFAULT] Conversion failed: {e}")
                         continue
-                    
+
                     # Then convert for each customer with their filters
                     for group, info in export_list_mssp.items():
                         customer_name = info.get('customer_name', group)
                         customer_filter_dir = info.get('customer_filters_directory')
-                        
+
                         if customer_filter_dir:
                             try:
                                 customer_converted = target.convert_rule(
                                     rule_content, rule_file, platform, customer_filter_dir
                                 )
-                                logger.info(f"  [{customer_name}] {customer_converted}")
+                                logger.info(f"  [{customer_name}]")
+                                sys.stdout.write(customer_converted + "\n")
                             except Exception as e:
                                 logger.warning(f"  [{customer_name}] Conversion failed: {e}")
                         else:
@@ -314,22 +317,24 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
                 # First show default conversion (no customer filters)
                 try:
                     default_converted = target.convert_rule(rule_content, rule_file, platform)
-                    logger.info(f"  [DEFAULT] {default_converted}")
+                    logger.info("  [DEFAULT]")
+                    sys.stdout.write(default_converted + "\n")
                 except Exception as e:
                     logger.error(f"  [DEFAULT] Conversion failed: {e}")
                     return True, search_warning
-                
+
                 # Then convert for each customer with their filters
                 for group, info in export_list_mssp.items():
                     customer_name = info.get('customer_name', group)
                     customer_filter_dir = info.get('customer_filters_directory')
-                    
+
                     if customer_filter_dir:
                         try:
                             customer_converted = target.convert_rule(
                                 rule_content, rule_file, platform, customer_filter_dir
                             )
-                            logger.info(f"  [{customer_name}] {customer_converted}")
+                            logger.info(f"  [{customer_name}]")
+                            sys.stdout.write(customer_converted + "\n")
                         except Exception as e:
                             logger.warning(f"  [{customer_name}] Conversion failed: {e}")
                     else:
@@ -401,7 +406,9 @@ def convert_sigma(
     try:
         rule_converted = target.convert_rule(rule_content, rule_file, platform)
 
-        logger.debug(f"Rule {rule_file} converted into: {rule_converted}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+        logger.debug(f"Rule {rule_file} converted into:", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
+        if not (parameters.export or parameters.search or parameters.integrity or parameters.module) and rule_converted:
+            sys.stdout.write(rule_converted + "\n")
 
     except SigmaFeatureNotSupportedByBackendError as e:
         logger.warning(f"Sigma Backend Error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
