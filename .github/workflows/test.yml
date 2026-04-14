@@ -33,5 +33,5 @@ jobs:
 
     - name: Run tests
       run: |
-        export PYTHONPATH=$PYTHONPATH:./src/. && pytest --open-files --random-order
+        export PYTHONPATH=$PYTHONPATH:./src/. && pytest --random-order
 
