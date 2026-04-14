@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from os import environ
 from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from azure.core.credentials import AccessToken, TokenCredential
-from azure.mgmt.resource import SubscriptionClient
+from azure.mgmt.resource.subscriptions import SubscriptionClient
 from azure.mgmt.securityinsight import SecurityInsights
 from azure.mgmt.securityinsight.models import TriggerOperator
 from azure.mgmt.securityinsight.models import ScheduledAlertRule

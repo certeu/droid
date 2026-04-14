@@ -1,6 +1,6 @@
 import logging
 from rich.logging import RichHandler
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 class AzureLogFilter(logging.Filter):
     """Azure logging filter
@@ -39,13 +39,13 @@ class ColorLogger(logging.Logger):
 
         if self.json_enabled:
             # Set up JSON file output
-            json_formatter = jsonlogger.JsonFormatter(json_format_str)
+            json_formatter = JsonFormatter(json_format_str)
             json_file_handler = logging.FileHandler(self.log_file)
             json_file_handler.setFormatter(json_formatter)
             self.addHandler(json_file_handler)
 
         if self.json_stdout:
-            stdout_formatter = jsonlogger.JsonFormatter(json_format_str)
+            stdout_formatter = JsonFormatter(json_format_str)
             console = logging.StreamHandler()
             console.setFormatter(stdout_formatter)
         else:

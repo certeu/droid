@@ -2,6 +2,7 @@
 Tests of the --json option
 """
 
+import logging
 import pytest
 
 from typer.testing import CliRunner
@@ -20,3 +21,7 @@ def test_convert_valid_file_default_json():
     result = runner.invoke(app, ["--json", "rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config.toml"])
     assert path.exists("droid.log")
     assert result.exit_code == 0
+    for ref in logging._handlerList:
+        handler = ref()
+        if handler and isinstance(handler, logging.FileHandler):
+            handler.close()
