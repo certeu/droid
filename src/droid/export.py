@@ -8,6 +8,7 @@ from pathlib import Path
 from rich import print
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
+from droid.rule_loader import load_rule_content
 
 def post_rule_content(rule_content):
     """Post-processing of rule content
@@ -22,19 +23,17 @@ def post_rule_content(rule_content):
 
 def load_rule(rule_file):
 
-    with open(rule_file, "r") as stream:
-        try:
-            object = list(yaml.safe_load_all(stream))[0]
-            if "fields" in object:
-                object.pop("fields")
-                # Here we remove the fields to avoid Sigma to arbitrary
-                # convert the rule to {{ query }} | table field1,field2
-            return object
-        except yaml.YAMLError as exc:
-            print(exc)
-            print("Error reading {0}".format(rule_file))
-            error = True
-            return error
+    try:
+        object = load_rule_content(rule_file)
+        if isinstance(object, dict) and "fields" in object:
+            object.pop("fields")
+            # Here we remove the fields to avoid Sigma to arbitrary
+            # convert the rule to {{ query }} | table field1,field2
+        return object
+    except yaml.YAMLError as exc:
+        print(exc)
+        print("Error reading {0}".format(rule_file))
+        return True
 
 def export_rule(
         parameters: dict, rule_content: object, rule_converted: str,

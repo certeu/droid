@@ -7,6 +7,7 @@ from pathlib import Path
 from rich import print
 from sigma.plugins import InstalledSigmaPlugins
 from droid.color import ColorLogger
+from droid.rule_loader import load_rule_content
 
 def load_rule(parameters, rule_file, logger):
     """Load rule
@@ -17,14 +18,12 @@ def load_rule(parameters, rule_file, logger):
     """
     logger.debug("processing rule {0}".format(rule_file))
 
-    with open(rule_file, 'r') as stream:
-        try:
-            object = list(yaml.safe_load_all(stream))[0]
-            return object
-        except yaml.YAMLError as exc:
-            print(exc)
-            print("Error reading {0}".format(rule_file))
-            error = True
+    try:
+        return load_rule_content(rule_file)
+    except yaml.YAMLError as exc:
+        print(exc)
+        print("Error reading {0}".format(rule_file))
+        return None
 
 
 def list_unique_keys(rule, unique_keys) -> None:

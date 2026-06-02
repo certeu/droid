@@ -11,6 +11,7 @@ from sigma.plugins import InstalledSigmaPlugins
 from sigma.exceptions import SigmaDetectionError
 from sigma.exceptions import SigmaConditionError
 from droid.color import ColorLogger
+from droid.rule_loader import load_rule_content
 
 class SigmaValidation:
 
@@ -90,15 +91,12 @@ def load_rule(parameters, logger, rule_file):
 
     logger.debug("processing rule {0}".format(rule_file), extra={"rule_file": rule_file})
 
-    with open(rule_file, 'r') as stream:
-        try:
-            object = list(yaml.safe_load_all(stream))[0]
-        except yaml.YAMLError as exc:
-            print(exc)
-            print("Error reading {0}".format(rule_file))
-            error = True
-
-    return object
+    try:
+        return load_rule_content(rule_file)
+    except yaml.YAMLError as exc:
+        print(exc)
+        print("Error reading {0}".format(rule_file))
+        return None
 
 def validate_rules(parameters, return_objects, base_config, logger_param) -> None:
 

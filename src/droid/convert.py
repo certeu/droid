@@ -17,6 +17,7 @@ from droid.integrity import integrity_rule
 from droid.platforms.elastic import ElasticPlatform
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
+from droid.rule_loader import load_rule_content
 
 class Conversion:
     """Base class handling the conversion
@@ -247,20 +248,18 @@ class Conversion:
 
 def load_rule(rule_file):
 
-    with open(rule_file, "r", encoding="utf-8") as stream:
-        try:
-            object = list(yaml.safe_load_all(stream))[0]
-            if "fields" in object:
-                object.pop("fields")
-                # Here we remove the fields to avoid Sigma to arbitrary
-                # convert the rule to {{ query }} | table field1,field2
-                # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/27
-            return object
-        except yaml.YAMLError as exc:
-            print(exc)
-            print("Error reading {0}".format(rule_file))
-            error = True
-            return error
+    try:
+        object = load_rule_content(rule_file)
+        if isinstance(object, dict) and "fields" in object:
+            object.pop("fields")
+            # Here we remove the fields to avoid Sigma to arbitrary
+            # convert the rule to {{ query }} | table field1,field2
+            # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/27
+        return object
+    except yaml.YAMLError as exc:
+        print(exc)
+        print("Error reading {0}".format(rule_file))
+        return True
 
 def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, platform, error, search_warning, rules, logger_param):
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from rich import print
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
+from droid.rule_loader import load_rule_content
 
 if TYPE_CHECKING:
     from droid.platforms.splunk import SplunkPlatform
@@ -20,15 +21,12 @@ if TYPE_CHECKING:
 
 def load_rule(rule_file):
 
-    with open(rule_file, "r") as stream:
-        try:
-            object = list(yaml.safe_load_all(stream))[0]
-            return object
-        except yaml.YAMLError as exc:
-            print(exc)
-            print("Error reading {0}".format(rule_file))
-            error = True
-            return error
+    try:
+        return load_rule_content(rule_file)
+    except yaml.YAMLError as exc:
+        print(exc)
+        print("Error reading {0}".format(rule_file))
+        return True
 
 def search_rule_splunk(rule_converted, platform: SplunkPlatform, rule_file, parameters, logger, error, search_warning):
     try:
