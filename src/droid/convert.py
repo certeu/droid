@@ -11,6 +11,7 @@ from sigma.plugins import InstalledSigmaPlugins
 from sigma.conversion.base import Backend, SigmaCollection
 from sigma.exceptions import SigmaTransformationError
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+from sigma.exceptions import SigmaConversionError
 from droid.search import search_rule
 from droid.export import export_rule
 from droid.integrity import integrity_rule
@@ -439,10 +440,26 @@ def convert_sigma(
         return error, search_warning
 
     except SigmaTransformationError as e:
+        if "not supported by backend" in str(e):
+            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+            error = False
+            return error, search_warning
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
+    except SigmaConversionError as e:
+        if "not supported by backend" in str(e):
+            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+            error = False
+            return error, search_warning
+        logger.error(f"Sigma Conversion error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        error = True
+        return error, search_warning
     except NotImplementedError as e:
+        if "not supported by backend" in str(e):
+            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+            error = False
+            return error, search_warning
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
