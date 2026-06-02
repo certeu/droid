@@ -97,9 +97,108 @@ def test_load_rule_merges_custom_from_correlation_document(tmp_path):
 
     loaded = load_rule_content(str(rule_file))
 
-    assert loaded["title"] == "Atomic 1"  # structural primary preserved
+    assert loaded["title"] == "Correlation"  # correlation identity wins
+    assert loaded["id"] == "22222222-2222-2222-2222-222222222222"
+    assert loaded["name"] == "atomic_1"  # structural field stays from atomic
+    assert loaded["logsource"] == {"category": "process_creation", "product": "windows"}
     assert loaded["custom"]["ignore_search"] is True
     assert loaded["custom"]["disabled"] is True
+
+
+def test_load_rule_correlation_metadata_overrides_atomic(tmp_path):
+    """Metadata fields surfaced to the target platform (title, description, level,
+    date, modified, author, tags, status, references, falsepositives) must come
+    from the correlation document so Sentinel/XDR/Splunk show the correlation
+    rule's identity, not the first atomic rule's.
+    """
+    import datetime
+
+    from droid.rule_loader import load_rule_content
+
+    rule_file = tmp_path / "correlation_metadata.yml"
+    rule_file.write_text(
+        "title: Atomic 1\n"
+        "id: 11111111-1111-1111-1111-111111111111\n"
+        "name: atomic_1\n"
+        "status: stable\n"
+        "description: Atomic rule referenced by the correlation.\n"
+        "author: alice\n"
+        "date: 2024-01-01\n"
+        "modified: 2024-06-01\n"
+        "level: low\n"
+        "tags: [attack.execution]\n"
+        "references: [https://example.com/atomic]\n"
+        "falsepositives: [Atomic noise]\n"
+        "logsource: {category: process_creation, product: windows}\n"
+        "detection: {selection: {CommandLine|contains: foo.exe}, condition: selection}\n"
+        "---\n"
+        "title: Convert Temporal Correlation Test\n"
+        "id: 33333333-3333-3333-3333-333333333333\n"
+        "status: test\n"
+        "description: Temporal correlation over the two atomic rules above.\n"
+        "author: pizza53\n"
+        "date: 2026-06-02\n"
+        "modified: 2026-06-10\n"
+        "level: high\n"
+        "tags: [attack.lateral_movement]\n"
+        "references: [https://example.com/correlation]\n"
+        "falsepositives: [Correlation noise]\n"
+        "correlation: {type: temporal, rules: [atomic_1], timespan: 10m}\n"
+    )
+
+    loaded = load_rule_content(str(rule_file))
+
+    assert loaded["title"] == "Convert Temporal Correlation Test"
+    assert loaded["id"] == "33333333-3333-3333-3333-333333333333"
+    assert loaded["status"] == "test"
+    assert loaded["description"] == "Temporal correlation over the two atomic rules above."
+    assert loaded["author"] == "pizza53"
+    assert loaded["date"] == datetime.date(2026, 6, 2)
+    assert loaded["modified"] == datetime.date(2026, 6, 10)
+    assert loaded["level"] == "high"
+    assert loaded["tags"] == ["attack.lateral_movement"]
+    assert loaded["references"] == ["https://example.com/correlation"]
+    assert loaded["falsepositives"] == ["Correlation noise"]
+    # Structural fields stay from the atomic doc so pipelines + backend still work.
+    assert loaded["name"] == "atomic_1"
+    assert loaded["logsource"] == {"category": "process_creation", "product": "windows"}
+    assert loaded["detection"] == {
+        "selection": {"CommandLine|contains": "foo.exe"},
+        "condition": "selection",
+    }
+
+
+def test_load_rule_atomic_metadata_kept_when_correlation_omits_it(tmp_path):
+    """Fields the correlation document doesn't declare fall back to the atomic doc.
+
+    Lets users keep e.g. `tags` on the atomic rule and only declare new metadata on
+    the correlation rule when they want to override it.
+    """
+    from droid.rule_loader import load_rule_content
+
+    rule_file = tmp_path / "partial_metadata.yml"
+    rule_file.write_text(
+        "title: Atomic\n"
+        "id: 11111111-1111-1111-1111-111111111111\n"
+        "name: atomic\n"
+        "author: alice\n"
+        "tags: [attack.execution]\n"
+        "logsource: {category: process_creation, product: windows}\n"
+        "detection: {selection: {CommandLine|contains: foo.exe}, condition: selection}\n"
+        "---\n"
+        "title: Correlation\n"
+        "id: 22222222-2222-2222-2222-222222222222\n"
+        "level: high\n"
+        "correlation: {type: temporal, rules: [atomic], timespan: 10m}\n"
+    )
+
+    loaded = load_rule_content(str(rule_file))
+
+    assert loaded["title"] == "Correlation"
+    assert loaded["level"] == "high"
+    # Correlation didn't declare these — atomic values flow through.
+    assert loaded["author"] == "alice"
+    assert loaded["tags"] == ["attack.execution"]
 
 def test_load_rule_correlation_custom_overrides_atomic_custom(tmp_path):
     """When both atomic and correlation docs declare `custom`, the correlation wins."""
