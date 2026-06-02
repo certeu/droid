@@ -125,6 +125,20 @@ class Conversion:
         return sigma_rule
 
     @staticmethod
+    def _file_has_correlation(rule_file) -> bool:
+        """Return True if any YAML document in the rule file is a correlation rule.
+
+        Correlation files typically contain the referenced atomic rules followed by the
+        `correlation:` document, so we must scan all documents — not just the first one
+        returned by `load_rule`.
+        """
+        with open(rule_file, "r", encoding="utf-8") as stream:
+            for doc in yaml.safe_load_all(stream):
+                if isinstance(doc, dict) and "correlation" in doc:
+                    return True
+        return False
+
+    @staticmethod
     def _rule_has_regex_modifier(rule_content) -> bool:
         """Check if a Sigma rule uses the |re (regex) modifier in its detection section.
 
@@ -173,10 +187,20 @@ class Conversion:
 
         if pipeline_config_group:
             rule_supported = True
-            pipeline_config = self._parameters[pipeline_config_group]["pipelines"]
-            # Format
-            if "format" in self._parameters[pipeline_config_group]:
-                self._format = self._parameters[pipeline_config_group]["format"]
+            pipeline_params = self._parameters[pipeline_config_group]
+            # Correlation rules can override both the pipelines list (`pipelines_correlation`)
+            # and the output format (`format_correlation`) to fall back to a
+            # non-data-model pipeline + default format because data_model finalizers don't
+            # work on correlation rules.
+            is_correlation_rule = "correlation" in rule_content or self._file_has_correlation(rule_file)
+            if is_correlation_rule and "pipelines_correlation" in pipeline_params:
+                pipeline_config = pipeline_params["pipelines_correlation"]
+            else:
+                pipeline_config = pipeline_params["pipelines"]
+            if is_correlation_rule and "format_correlation" in pipeline_params:
+                self._format = pipeline_params["format_correlation"]
+            elif "format" in pipeline_params:
+                self._format = pipeline_params["format"]
             else:
                 self._format = "default"
         else:

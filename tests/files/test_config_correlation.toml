@@ -1,0 +1,44 @@
+# This is a TOML document config exercising format_correlation / pipelines_correlation overrides
+
+title = "droid configuration file"
+
+[base]
+
+raw_rules_directory = "rules-raw"
+sigma_validation_config = "tests/files/test_validate.yml"
+
+[platforms]
+
+[platforms.splunk]
+
+url = "splunk23.pizza-planet.local"
+verify_cert = true
+port = "8089"
+test_earliest_time = "-1h@h"
+test_latest_time = "now"
+
+earliest_time = "-1h@h"
+latest_time = "now"
+
+cron_schedule = "0 * * * *"
+
+[platforms.splunk.pipelines.windows_process_creation]
+
+pipelines = ["splunk_windows", "splunk_cim"]
+pipelines_correlation = ["splunk_windows"]
+product = "windows"
+category = "process_creation"
+format = "data_model"
+format_correlation = "default"
+
+[platforms.splunk.savedsearch_parameters]
+
+alert_type = "number of events"
+app = "search"
+sharing = "app"
+alert_comparator = "greater than"
+alert_threshold = 0
+"alert.track" = 1
+allow_skew = "67%"
+"alert.suppress" = 0
+"alert.digest_mode" = 0
