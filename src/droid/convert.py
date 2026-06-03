@@ -304,15 +304,22 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
                 for rule_file in path.rglob("*.y*ml"):
                     rule_content = load_rule(rule_file)
                     logger.info(f"Converting rule: {rule_file}")
-                    
+
                     # First show default conversion (no customer filters)
                     try:
                         default_converted = target.convert_rule(rule_content, rule_file, platform)
-                        logger.info("  [DEFAULT]")
-                        sys.stdout.write(default_converted + "\n")
                     except Exception as e:
                         logger.error(f"  [DEFAULT] Conversion failed: {e}")
                         continue
+
+                    # convert_rule returns None when the rule is unsupported; the warning
+                    # is already emitted inside convert_rule, so skip the rest of the
+                    # customers — there is nothing to render.
+                    if default_converted is None:
+                        continue
+
+                    logger.info("  [DEFAULT]")
+                    sys.stdout.write(default_converted + "\n")
 
                     # Then convert for each customer with their filters
                     for group, info in export_list_mssp.items():
@@ -324,28 +331,36 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
                                 customer_converted = target.convert_rule(
                                     rule_content, rule_file, platform, customer_filter_dir
                                 )
-                                logger.info(f"  [{customer_name}]")
-                                sys.stdout.write(customer_converted + "\n")
                             except Exception as e:
                                 logger.warning(f"  [{customer_name}] Conversion failed: {e}")
+                                continue
+                            if customer_converted is None:
+                                continue
+                            logger.info(f"  [{customer_name}]")
+                            sys.stdout.write(customer_converted + "\n")
                         else:
                             logger.info(f"  [{customer_name}] No filters configured - same as default")
-                    
+
                     print()  # Empty line between rules for readability
-                    
+
             elif path.is_file():
                 rule_file = path
                 rule_content = load_rule(rule_file)
                 logger.info(f"Converting rule: {rule_file}")
-                
+
                 # First show default conversion (no customer filters)
                 try:
                     default_converted = target.convert_rule(rule_content, rule_file, platform)
-                    logger.info("  [DEFAULT]")
-                    sys.stdout.write(default_converted + "\n")
                 except Exception as e:
                     logger.error(f"  [DEFAULT] Conversion failed: {e}")
                     return True, search_warning
+
+                # Unsupported rule: warning already logged by convert_rule; nothing to render.
+                if default_converted is None:
+                    return error, search_warning
+
+                logger.info("  [DEFAULT]")
+                sys.stdout.write(default_converted + "\n")
 
                 # Then convert for each customer with their filters
                 for group, info in export_list_mssp.items():
@@ -357,10 +372,13 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
                             customer_converted = target.convert_rule(
                                 rule_content, rule_file, platform, customer_filter_dir
                             )
-                            logger.info(f"  [{customer_name}]")
-                            sys.stdout.write(customer_converted + "\n")
                         except Exception as e:
                             logger.warning(f"  [{customer_name}] Conversion failed: {e}")
+                            continue
+                        if customer_converted is None:
+                            continue
+                        logger.info(f"  [{customer_name}]")
+                        sys.stdout.write(customer_converted + "\n")
                     else:
                         logger.info(f"  [{customer_name}] No filters configured - same as default")
             
