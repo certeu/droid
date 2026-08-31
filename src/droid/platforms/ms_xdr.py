@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pprint import pprint
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-from droid.platforms.common import get_pipeline_group_match
+from droid.platforms.common import get_pipeline_group_match, get_token_hook_headers
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 from cryptography import x509
@@ -804,10 +804,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         if '{TENANT_ID}' in hook_url:
             hook_url = hook_url.replace('{TENANT_ID}', tenant_id)
 
-        headers = {}
-        api_key = environ.get('DROID_AZURE_TOKEN_X_API_KEY')
-        if api_key:
-            headers['X-API-Key'] = api_key
+        headers = get_token_hook_headers()
 
         for attempt in range(max_retries):
             try:

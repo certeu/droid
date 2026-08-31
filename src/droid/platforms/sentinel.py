@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
+from droid.platforms.common import get_token_hook_headers
 
 class CustomTokenCredential:
     def __init__(self, token: str, expires_on: int):
@@ -186,10 +187,7 @@ class SentinelPlatform(AbstractPlatform):
             self.logger.debug("Using cached token")
             return self._token, self._token_expiration
 
-        headers = {}
-        api_key = environ.get('DROID_AZURE_TOKEN_X_API_KEY')
-        if api_key:
-            headers['X-API-Key'] = api_key
+        headers = get_token_hook_headers()
 
         for attempt in range(max_retries):
             try:
