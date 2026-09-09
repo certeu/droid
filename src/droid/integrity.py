@@ -29,7 +29,7 @@ def load_rule(rule_file):
         print("Error reading {0}".format(rule_file))
         return True
 
-def check_rule_removed(rule_content, rule_file, saved_search, logger, error):
+def check_rule_removed(rule_content, rule_file, saved_search, logger, error, tolerate_deletion_delay=False):
     is_removed = rule_content.get("custom", {}).get("removed")
 
     if not saved_search:
@@ -40,6 +40,13 @@ def check_rule_removed(rule_content, rule_file, saved_search, logger, error):
             logger.error(f"Rule not found {rule_file}")
             error = True
         return error
+
+    if is_removed and tolerate_deletion_delay:
+        # The platform can take a while to actually drop the rule from its
+        # backend, comparing the content of a rule meant to be gone is pointless
+        logger.warning(f"The rule {rule_file} is marked as removed but is still present on the platform - skipping the integrity check")
+        return False
+
     return None
 
 def integrity_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform, rule_file, parameters, logger, error):
@@ -264,9 +271,10 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on tenant {tenant_id} from {group} - error {e}")
             return error
 
-        error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
-        if error is not None:
-            error_occured = True
+        removed_check = check_rule_removed(rule_content, rule_file, saved_search, logger, error, tolerate_deletion_delay=True)
+        if removed_check is not None:
+            if removed_check:
+                error_occured = True
             continue
 
         error = integrity_rule_ms_xdr(customer_rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
@@ -274,8 +282,7 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
         if error:
             error_occured = True
 
-    if error_occured:
-        return error
+    return error_occured
 
 def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, saved_search=None):
     try:
@@ -285,7 +292,7 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
         return error
 
-    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error, tolerate_deletion_delay=True)
     if error is not None:
         return error
 
