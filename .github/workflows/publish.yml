@@ -1,17 +1,54 @@
 name: Publish to PyPI.org
+
 on:
   release:
     types: [published]
+
+# No token scopes by default; each job opts in to exactly what it needs.
+permissions: {}
+
 jobs:
-  pypi:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-      - run: python3 -m pip install --upgrade build && python3 -m build
-      - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+          python-version: '3.12'
+
+      - name: Build release distributions
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build
+
+      - name: Upload release distributions
+        uses: actions/upload-artifact@v4
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          name: release-dists
+          path: dist/
+          if-no-files-found: error
+
+  pypi-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      # Mandatory for PyPI trusted publishing (OIDC). No API token is used:
+      # gh-action-pypi-publish exchanges this job's OIDC token for a
+      # short-lived, project-scoped PyPI token.
+      id-token: write
+
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
