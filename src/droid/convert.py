@@ -20,6 +20,24 @@ from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 from droid.rule_loader import load_rule_content
 
+
+def unsupported_rule_warning(error) -> Optional[str]:
+    """Tell a rule the backend cannot express from a genuine conversion failure
+
+    A rule the backend has no way to express is not a droid failure: it is warned
+    about and skipped so that the rest of the run carries on and the exit code
+    stays clean. Returns the warning to log, or None when the error is a real one.
+    """
+    message = str(error).lower()
+    if "not supported by backend" in message:
+        return "Backend does not support this correlation type"
+    if "unsupported field" in message:
+        # Raised by the backend pipelines, HarfangLab among them, when a rule
+        # uses a field the platform has no equivalent for
+        return "Backend does not support one of the fields used by the rule"
+    return None
+
+
 class Conversion:
     """Base class handling the conversion
 
@@ -238,7 +256,16 @@ class Conversion:
                 self.logger.debug(f"Applying default filters from {self._filters_directory}")
 
             sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
-            rule_converted = backend.convert(sigma_rule, self._format)[0]
+            converted = backend.convert(sigma_rule, self._format)
+            if self._platform_name == "harfang_lab" and is_correlation_rule and len(converted) > 1:
+                # The HarfangLab backend emits one Sigma document per rule, already
+                # separated by "---" but not newline terminated. A correlation rule is
+                # meaningless without the rules it references, so the whole set is kept
+                # together. Only a correlation is joined: the Sigma rule endpoint takes
+                # a single document and refuses anything holding several.
+                rule_converted = "\n".join(converted)
+            else:
+                rule_converted = converted[0]
             # For esql and eql backend only
             if isinstance(platform, ElasticPlatform):
                 platform.get_index_name(pipeline, rule_content)
@@ -458,24 +485,27 @@ def convert_sigma(
         return error, search_warning
 
     except SigmaTransformationError as e:
-        if "not supported by backend" in str(e):
-            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        warning = unsupported_rule_warning(e)
+        if warning:
+            logger.warning(f"{warning}: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
             error = False
             return error, search_warning
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
     except SigmaConversionError as e:
-        if "not supported by backend" in str(e):
-            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        warning = unsupported_rule_warning(e)
+        if warning:
+            logger.warning(f"{warning}: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
             error = False
             return error, search_warning
         logger.error(f"Sigma Conversion error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
         error = True
         return error, search_warning
     except NotImplementedError as e:
-        if "not supported by backend" in str(e):
-            logger.warning(f"Backend does not support this correlation type: {rule_file}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        warning = unsupported_rule_warning(e)
+        if warning:
+            logger.warning(f"{warning}: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
             error = False
             return error, search_warning
         logger.error(f"Sigma Transformation error: {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})

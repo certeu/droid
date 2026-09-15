@@ -63,6 +63,30 @@ category = "process_creation"
         customer_name = "Zoidberg"
         customer_filters_directory = "tests/files/filters/zoidberg"
 
+[platforms.harfang_lab]
+
+url = "https://hurukai.pizza-planet.local"
+# token is passed in environment variable
+source_id = "ebae6f85-e097-4987-8524-4398240e7d9a"
+source_id_correlation = "35d913b3-f575-4d23-93f7-b2e78c0bfbea" # correlation rules live in their own source
+tls_verify = true
+timeout = 120
+
+alert_prefix = "[PIZZA]"
+
+## Default state applied to the exported rules
+
+global_state = "alert" # alert|backend_alert|block|disabled|quarantine
+hl_status = "testing" # experimental|stable|testing
+block_on_agent = false
+quarantine_on_agent = false
+
+[platforms.harfang_lab.pipelines.windows_process_creation]
+
+pipelines = ["harfanglab"]
+product = "windows"
+category = "process_creation"
+
 [platforms.splunk]
 
 url = "splunk658.pizza-planet.local"

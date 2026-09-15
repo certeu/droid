@@ -1,0 +1,29 @@
+title: Two Atomic Rules Test
+id: 6c2f9a41-3d8b-4e17-8c53-1b4e7f2a9d03
+status: test
+description: Two atomic rules in a single file, neither of them a correlation
+author: pizza53
+date: 2026-09-15
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        CommandLine|contains: 'process_perflez1.pl'
+    condition: selection
+level: medium
+---
+title: Two Atomic Rules Test - Second
+id: 0f5b8d72-6a14-4c93-b0e8-5d27c1a6f804
+status: test
+description: The second atomic rule of the file
+author: pizza53
+date: 2026-09-15
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        CommandLine|contains: 'process_perflez2.pl'
+    condition: selection
+level: medium

@@ -25,6 +25,8 @@ class Platform(str, Enum):
     microsoft_xdr = "microsoft_xdr"
     esql = "esql"
     eql = "eql"
+    # Must match the identifier pySigma derives from HarfangLabBackend
+    harfang_lab = "harfang_lab"
 
 
 class UpdateSource(str, Enum):

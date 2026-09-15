@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from droid.platforms.sentinel import SentinelPlatform
     from droid.platforms.elastic import ElasticPlatform
     from droid.platforms.ms_xdr import MicrosoftXDRPlatform
+    from droid.platforms.harfanglab import HarfangLabPlatform
 
 def load_rule(rule_file):
 
@@ -395,6 +396,61 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
     if error:
         return error
 
+def integrity_rule_harfanglab(rule_converted, rule_content, platform: HarfangLabPlatform, rule_file, parameters, logger, error):
+    try:
+        saved_search: dict = platform.get_rule(
+            rule_content["id"], platform.is_correlation_rule(rule_content)
+        )
+    except Exception as e:
+        logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
+        return error
+
+    error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+    if error is not None:
+        return error
+
+    logger.info(f"Successfully retrieved the rule {rule_file}")
+
+    # HarfangLab re-serialises the Sigma document it stores, so the content is
+    # compared once parsed rather than as raw text
+    expected_content = platform.get_rule_content(rule_content, rule_converted)
+
+    if platform.content_matches(saved_search.get("content"), expected_content):
+        logger.debug("detection in rule_content matches content in result")
+    else:
+        logger.error("detection in rule_content does not match content in result")
+        error = True
+
+    expected_name = platform.get_rule_name(rule_content, rule_file)
+
+    if saved_search.get("name") == expected_name:
+        logger.debug("title in rule_content matches name in result")
+    else:
+        logger.error("title in rule_content does not match name in result")
+        error = True
+
+    if saved_search.get("errors"):
+        logger.error(f"HarfangLab reported parsing errors on the rule: {saved_search['errors']}")
+        error = True
+
+    # Check if disabled
+    is_disabled = rule_content.get("custom", {}).get("disabled")
+    is_enabled = saved_search.get("enabled")
+
+    if is_disabled and not is_enabled:
+        logger.info("The rule is disabled as expected")
+    elif is_disabled and is_enabled:
+        logger.error("The rule is not disabled on the platform")
+        error = True
+    elif is_disabled is None and not is_enabled:
+        logger.error("The rule is not enabled on the platform")
+        error = True
+    elif is_disabled is None and is_enabled:
+        logger.info("The rule is enabled as expected")
+
+    if error:
+        return error
+
 def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param):
 
     logger = ColorLogger(__name__, **logger_param)
@@ -408,6 +464,9 @@ def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file
         return error
     elif parameters.platform in ["esql", "eql"]:
         error = integrity_rule_elastic(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
+        return error
+    elif parameters.platform == "harfang_lab":
+        error = integrity_rule_harfanglab(rule_converted, rule_content, platform, rule_file, parameters, logger, error)
         return error
     elif "microsoft_sentinel" in parameters.platform and parameters.mssp:
         error = integrity_rule_sentinel_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error)

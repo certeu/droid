@@ -139,6 +139,18 @@ _ELASTIC_ENV_GROUPS: list[EnvVarGroup] = [
     ),
 ]
 
+_HARFANGLAB_ENV_GROUPS: list[EnvVarGroup] = [
+    EnvVarGroup(
+        condition=_is_deploy_op,
+        mappings=[
+            EnvVarMapping("DROID_HARFANGLAB_TOKEN",                 "token",                 required=True),
+            EnvVarMapping("DROID_HARFANGLAB_URL",                   "url",                   required=False),
+            EnvVarMapping("DROID_HARFANGLAB_SOURCE_ID",             "source_id",             required=False),
+            EnvVarMapping("DROID_HARFANGLAB_SOURCE_ID_CORRELATION", "source_id_correlation", required=False),
+        ],
+    ),
+]
+
 
 # ---------------------------------------------------------------------------
 # Per-platform helpers
@@ -150,6 +162,13 @@ def _azure_validator(cfg: dict, params: Any) -> None:
         raise ValueError(f"Invalid search_auth: {cfg['search_auth']}")
     if "export_auth" in cfg and cfg["export_auth"] not in valid:
         raise ValueError(f"Invalid export_auth: {cfg['export_auth']}")
+
+
+def _harfanglab_validator(cfg: dict, params: Any) -> None:
+    if getattr(params, "mssp", False):
+        raise ValueError("MSSP mode is not supported on HarfangLab")
+    if getattr(params, "search", False):
+        raise ValueError("Searching is not supported on HarfangLab")
 
 
 def _xdr_toml_key_resolver(params: Any) -> str:
@@ -192,6 +211,11 @@ def _elastic_factory(config: dict, logger_param: dict, params: Any):
     return ElasticPlatform(config, logger_param, params.platform, raw=False)
 
 
+def _harfanglab_factory(config: dict, logger_param: dict, params: Any):
+    from droid.platforms.harfanglab import HarfangLabPlatform
+    return HarfangLabPlatform(config, logger_param)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -230,6 +254,15 @@ PLATFORM_REGISTRY: dict[str, PlatformDescriptor] = {
         env_var_groups=_ELASTIC_ENV_GROUPS,
         raw_rule_strategy=RawRuleStrategy(require_platform_in_path=False),
         factory=_elastic_factory,
+    ),
+    "harfang_lab": PlatformDescriptor(
+        toml_key="harfang_lab",
+        env_var_groups=_HARFANGLAB_ENV_GROUPS,
+        # HarfangLab stores Sigma documents, so a raw rule would carry the very
+        # content the Sigma path already produces
+        raw_rule_strategy=RawRuleStrategy(never_raw=True),
+        factory=_harfanglab_factory,
+        post_load_validator=_harfanglab_validator,
     ),
 }
 

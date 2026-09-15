@@ -186,6 +186,13 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
         logger.warning(f"Search is ignored for {rule_file}")
         return error, search_warning
 
+    if parameters.platform == "harfang_lab":
+        # HarfangLab does not expose an endpoint to run a Sigma rule against the
+        # collected telemetry
+        logger.error("Searching is not supported on HarfangLab")
+        error = True
+        return error, search_warning
+
     if parameters.platform == "splunk":
         error, search_warning = search_rule_splunk(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
         return error, search_warning

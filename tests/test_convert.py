@@ -362,3 +362,56 @@ def test_search_rule_short_circuits_on_correlation_ignore_search(tmp_path):
     )
     assert error is False
     assert search_warning is False
+
+def test_unsupported_rule_warning_tells_a_correlation_type_apart():
+    """A correlation type the backend cannot express is a warning, not a failure"""
+    from droid.convert import unsupported_rule_warning
+
+    warning = unsupported_rule_warning(
+        Exception("Correlation type temporal not supported by backend")
+    )
+    assert warning == "Backend does not support this correlation type"
+
+
+def test_unsupported_rule_warning_tells_an_unsupported_field_apart():
+    """A field the backend has no equivalent for is a warning, not a failure"""
+    from droid.convert import unsupported_rule_warning
+
+    warning = unsupported_rule_warning(
+        Exception(
+            "Rule contains unsupported field 'Provider_Name' for the HarfangLab Sigma backend!"
+        )
+    )
+    assert warning == "Backend does not support one of the fields used by the rule"
+
+
+def test_unsupported_rule_warning_keeps_a_genuine_error_an_error():
+    """Anything else stays a hard error so that the run fails"""
+    from droid.convert import unsupported_rule_warning
+
+    assert unsupported_rule_warning(Exception("Invalid field mapping")) is None
+
+
+def test_convert_harfanglab_unsupported_field_is_a_soft_error():
+    """An unsupported field is warned about and skipped, the run still succeeds"""
+    result = runner.invoke(app, [
+        "rules", "convert",
+        "--platform", "harfang_lab",
+        "--rules", "tests/files/sigma-rules/unsupported/convert_harfanglab_unsupported_field_rule.yml",
+        "--config-file", "tests/files/test_config.toml",
+    ])
+    assert result.exit_code == 0
+
+
+def test_convert_harfanglab_keeps_a_multi_rule_atomic_file_to_one_document():
+    """Only a correlation is joined, the Sigma rule endpoint refuses several documents"""
+    result = runner.invoke(app, [
+        "rules", "convert",
+        "--platform", "harfang_lab",
+        "--rules", "tests/files/sigma-rules/harfanglab/convert_harfanglab_two_atomic_rules.yml",
+        "--config-file", "tests/files/test_config.toml",
+    ])
+    assert result.exit_code == 0
+
+    assert "6c2f9a41-3d8b-4e17-8c53-1b4e7f2a9d03" in result.stdout
+    assert "0f5b8d72-6a14-4c93-b0e8-5d27c1a6f804" not in result.stdout
