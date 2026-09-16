@@ -409,9 +409,9 @@ class SentinelPlatform(AbstractPlatform):
                 if results.status == LogsQueryStatus.SUCCESS:
                     result = sum(len(table.rows) for table in results.tables)
                     if result > 0:
-                        self.logger.warning(f"(Sentinel MSSP) Results for {customer_name or workspace_name}: {result}, {rule_file}")
+                        self.logger.warning(f"(Sentinel MSSP) {result} hit(s) found for {rule_file} on customer '{customer_name or workspace_name}'")
                     else:
-                        self.logger.info(f"(Sentinel MSSP) No results for {customer_name or workspace_name}, {rule_file}")
+                        self.logger.info(f"(Sentinel MSSP) No hits for {rule_file} on customer '{customer_name or workspace_name}'")
                     total_result += result
                 elif results.status == LogsQueryStatus.PARTIAL:
                     self.logger.error(f"Rule {rule_file} partial error for {customer_name or workspace_name}: {results.partial_error}")
@@ -456,9 +456,9 @@ class SentinelPlatform(AbstractPlatform):
 
                 for customer, result in results.items():
                     if result > 0:
-                        self.logger.warning(f"(Sentinel MSSP) Results for {customer}: {result}, {rule_file}")
+                        self.logger.warning(f"(Sentinel MSSP) {result} hit(s) found for {rule_file} on customer '{customer}'")
                     else:
-                        self.logger.info(f"(Sentinel MSSP) No results for {customer}, {rule_file}")
+                        self.logger.info(f"(Sentinel MSSP) No hits for {rule_file} on customer '{customer}'")
                     total_result += result
 
                 return total_result

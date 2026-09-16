@@ -35,7 +35,7 @@ def search_rule_splunk(rule_converted, platform: SplunkPlatform, rule_file, para
 
         if result["resultCount"] > 0: # If the rule has match
             job_url = result["jobUrl"]
-            logger.warning(f"(Splunk) Match found for {rule_file} - {job_url}")
+            logger.warning(f"(Splunk) {result['resultCount']} hit(s) found for {rule_file} - {job_url}")
             search_warning = True
             return error, search_warning
         else:
@@ -56,7 +56,7 @@ def search_rule_sentinel_mssp(rule_converted, rule_content, platform: SentinelPl
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0:  # If the rule has match
-            logger.warning(f"(Sentinel MSSP) Match found for {rule_file} - {result} hit(s)")
+            logger.warning(f"(Sentinel MSSP) {result} hit(s) found in total for {rule_file}")
             search_warning = True
             return error, search_warning
         else:
@@ -76,7 +76,7 @@ def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, 
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f"(Sentinel) Match found for {rule_file} - {result} hit(s)")
+            logger.warning(f"(Sentinel) {result} hit(s) found for {rule_file}")
             search_warning = True
             return error, search_warning
         else:
@@ -98,11 +98,14 @@ def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDR
 
     logger.info("Searching for designated customers")
 
+    total_result = 0
+
     for group, info in export_list.items():
 
         tenant_id = info['tenant_id']
         customer_name = info.get('customer_name')
         customer_filter_dir = info.get('customer_filters_directory')
+        customer = customer_name or tenant_id
 
         logger.debug(f"Processing rule on {tenant_id} from group id {group}")
 
@@ -124,14 +127,19 @@ def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDR
             logger.info(f"Successfully searched the rule {rule_file}")
 
             if result > 0:  # If the rule has a match
-                logger.warning(f"{result} Matches found for {rule_file}")
+                logger.warning(f"(XDR MSSP) {result} hit(s) found for {rule_file} on customer '{customer}'")
                 search_warning = True
             else:
-                logger.info(f"No hits for {rule_file}")
+                logger.info(f"(XDR MSSP) No hits for {rule_file} on customer '{customer}'")
+
+            total_result += result
 
         except Exception as e:
             logger.error(f"Couldn't search for the rule {rule_file} for tenant {tenant_id} - error {e}")
             error = True
+
+    if total_result > 0:
+        logger.warning(f"(XDR MSSP) {total_result} hit(s) found in total for {rule_file}")
 
     return error, search_warning
 
@@ -143,11 +151,11 @@ def search_rule_ms_xdr(rule_converted, platform: MicrosoftXDRPlatform, rule_file
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f"{result} Matches found for {rule_file}")
+            logger.warning(f"(XDR) {result} hit(s) found for {rule_file}")
             search_warning = True
             return error, search_warning
         else:
-            logger.info(f"No hits for {rule_file}")
+            logger.info(f"(XDR) No hits for {rule_file}")
             return error, search_warning
 
     except Exception as e:
@@ -163,7 +171,7 @@ def search_rule_elastic(rule_converted, platform: ElasticPlatform, rule_file, pa
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result > 0: # If the rule has match
-            logger.warning(f"(Elastic) {result} hits found for {rule_file}")
+            logger.warning(f"(Elastic) {result} hit(s) found for {rule_file}")
             search_warning = True
             return error, search_warning
         else:
