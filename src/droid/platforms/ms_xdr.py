@@ -10,10 +10,9 @@ import time
 
 from os import environ
 from datetime import datetime, timedelta
-from pprint import pprint
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-from droid.platforms.common import get_pipeline_group_match, get_token_hook_headers
+from droid.platforms.common import get_error_message, get_pipeline_group_match, get_token_hook_headers
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 from cryptography import x509
@@ -162,7 +161,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                                 self.logger.info(f"Rule {rule_file} was successfully deleted from tenant {tenant_id}")
                             else:
                                 self.logger.error(
-                                    f"Could not delete {rule_file} from tenant {tenant_id} - error: {response.json()['error']['message']}",
+                                    f"Could not delete {rule_file} from tenant {tenant_id} - error: {get_error_message(response)}",
                                     extra={
                                         "rule_file": rule_file,
                                         "rule_converted": rule_converted,
@@ -184,10 +183,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         )
                         error = True
                 if error:
-                    raise
+                    raise Exception(f"Could not remove the rule {rule_file} from one or more tenants")
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
-                raise
+                raise Exception("Export list not found. Please provide the list of designated customers")
         else:
             existing_rule = self.get_rule(rule_content["id"])
             tenant_id = self._tenant_id
@@ -207,14 +206,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     )
                 else:
                     self.logger.error(
-                        f"Could not delete {rule_file} - error: {response.json()['error']['message']}",
+                        f"Could not delete {rule_file} - error: {get_error_message(response)}",
                         extra={
                             "rule_file": rule_file,
                             "rule_converted": rule_converted,
                             "rule_content": rule_content,
                         },
                     )
-                    raise
+                    raise Exception(f"Could not delete {rule_file} - error: {get_error_message(response)}")
             else:
                 self.logger.info(
                     f"Rule {rule_file} was already removed",
@@ -473,12 +472,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         )
                         error = True
                 if error:
-                    raise
+                    raise Exception(f"Could not export the rule {rule_file} to one or more tenants")
             else:
                 self.logger.error(
                     "Export list not found. Please provide the list of designated customers"
                 )
-                raise
+                raise Exception("Export list not found. Please provide the list of designated customers")
         else:
             try:
                 self.push_detection_rule(
@@ -574,28 +573,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 url=api_url, payload=alert_rule, tenant_id=tenant_id
             )
 
-        if status_code == 400:
-            self.logger.error(
-                f"Could not export the rule {rule_file} due to a bad request. {response['error']['message']}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": response,
-                },
-            )
-        elif status_code == 403:
-            self.logger.error(
-                f"Could not export the rule {rule_file} due to insufficient permissions. {response}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": response,
-                },
-            )
-        elif status_code == 201 or 200:
-            if "error" in response:
+        if status_code in (200, 201, 204):
+            if isinstance(response, dict) and "error" in response:
                 self.logger.error(
                     f"Could not export the rule {rule_file}",
                     extra={
@@ -606,19 +585,34 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     },
                 )
                 raise Exception(response)
-            else:
-                self.logger.info(
-                    f"Successfully exported the rule {rule_file}",
-                    extra={
-                        "rule_file": rule_file,
-                        "rule_converted": rule_converted,
-                        "rule_content": rule_content,
-                    },
-                )
-                time.sleep(6)
+            self.logger.info(
+                f"Successfully exported the rule {rule_file}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                },
+            )
+            time.sleep(6)
+            return True
+
+        if status_code == 400:
+            reason = f"due to a bad request. {get_error_message(response)}"
+        elif status_code == 403:
+            reason = f"due to insufficient permissions. {get_error_message(response)}"
         else:
-            print(status_code)
-            pprint(response)
+            reason = f"due to an unexpected status code {status_code}. {get_error_message(response)}"
+
+        self.logger.error(
+            f"Could not export the rule {rule_file} {reason}",
+            extra={
+                "rule_file": rule_file,
+                "rule_converted": rule_converted,
+                "rule_content": rule_content,
+                "error": response,
+            },
+        )
+        raise Exception(f"Could not export the rule {rule_file} {reason}")
 
     def parse_actions(self, actions, rule_file=None):
         # TODO: It might be better to have a schema validation for the actions

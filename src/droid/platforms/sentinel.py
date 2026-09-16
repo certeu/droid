@@ -594,10 +594,10 @@ class SentinelPlatform(AbstractPlatform):
                         self.logger.error(f"Failed to delete the rule {rule_file} from {workspace_name} - error: {e}")
                         error = True
                 if error:
-                    raise
+                    raise Exception(f"Could not delete the rule {rule_file} from one or more workspaces")
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
-                raise
+                raise Exception("Export list not found. Please provide the list of designated customers")
         else:
             credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)
@@ -798,10 +798,10 @@ class SentinelPlatform(AbstractPlatform):
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
                         error = True
                 if error:
-                    raise
+                    raise Exception(f"Could not export the rule {rule_file} to one or more workspaces")
             else:
                 self.logger.error("Export list not found. Please provide the list of designated customers")
-                raise
+                raise Exception("Export list not found. Please provide the list of designated customers")
         else:
             credential = self.get_credentials()
             client = SecurityInsights(credential, self._subscription_id)

@@ -33,6 +33,28 @@ def get_token_hook_headers():
 
     return {}
 
+def get_error_message(response):
+    """Extract the error message out of a platform API response
+
+    The response is the already decoded body. It may be None when the request
+    could not be performed at all, or may not carry the expected error
+    structure, hence the fallbacks.
+
+    Return: a str with the error message
+    """
+
+    if isinstance(response, dict):
+        error = response.get('error')
+        if isinstance(error, dict):
+            return error.get('message', str(error))
+        if error:
+            return str(error)
+
+    if response is None:
+        return "No response from the platform"
+
+    return str(response)
+
 def get_pipeline_group_match(rule_content: dict, fields: dict):
     """Retrieve the config group name based on a dict
 
