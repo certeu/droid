@@ -489,8 +489,9 @@ def convert_sigma(
     if parameters.export and parameters.search and rule_converted:
         try:
             error, search_warning = search_rule(parameters, rule_content, rule_converted, platform, rule_file, error, search_warning, logger_param)
-        except:
+        except Exception as e:
             logger.error(f"Could not export the rule {rule_file} since the search ran into error.", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+            error = True
 
         if not error:
             error = False
