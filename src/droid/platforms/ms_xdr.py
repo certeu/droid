@@ -21,8 +21,13 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.backends import default_backend
 from typing import Optional, Callable
 
-# Upper bound applied to a Retry-After delay so a misbehaving header cannot stall a run
-MAX_RETRY_AFTER_SECONDS = 300
+# Sanity bound on a single Retry-After delay. Graph quota windows are minutes, not
+# hours, so anything above this is a malformed header rather than a real wait.
+MAX_RETRY_AFTER_SECONDS = 3600
+
+# Total time a single request may spend waiting on throttling before giving up.
+# Overridable per platform with the "max_throttle_wait" parameter.
+DEFAULT_MAX_THROTTLE_WAIT = 1800
 
 # Budget headers Graph may attach to a throttled response, reported under --debug
 # to explain which limit was hit (https://learn.microsoft.com/en-us/graph/throttling)
@@ -87,6 +92,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Conversion callback for re-converting rules with customer-specific filters
         self._convert_rule_callback: Optional[Callable] = None
         
+        self._max_throttle_wait = self._parameters.get("max_throttle_wait", DEFAULT_MAX_THROTTLE_WAIT)
+
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token_cache = {}
 
@@ -916,10 +923,19 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 retry_date = retry_date.replace(tzinfo=timezone.utc)
             delay = (retry_date - datetime.now(timezone.utc)).total_seconds()
 
-        return max(0.0, min(delay, MAX_RETRY_AFTER_SECONDS))
+        if delay > MAX_RETRY_AFTER_SECONDS:
+            # Never clamp silently: retrying before the window Graph named just earns
+            # another 429, and every retry accrues against the tenant quota
+            self.logger.warning(f"Graph asked to wait {delay:.0f} seconds, which is implausibly long, capping at {MAX_RETRY_AFTER_SECONDS} seconds")
+            return float(MAX_RETRY_AFTER_SECONDS)
 
-    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5, max_throttle_retries=10):
+        return max(0.0, delay)
+
+    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5, max_throttle_retries=10, max_throttle_wait=None):
         api_url = self._api_base_url + url
+
+        if max_throttle_wait is None:
+            max_throttle_wait = self._max_throttle_wait
 
         if not tenant_id:
             tenant_id = self._tenant_id
@@ -940,6 +956,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         attempt = 0
         throttle_attempt = 0
+        throttle_waited = 0.0
         token_refreshed = False
         while attempt < max_retries:
             try:
@@ -973,7 +990,15 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         self.logger.warning(f"Rate limit reached with no Retry-After header, backing off {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
                     else:
                         self.logger.warning(f"Rate limit reached, honouring Retry-After of {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
+
+                    # Sleeping past the budget only to fail anyway wastes the whole wait,
+                    # so refuse the wait we cannot afford and report what Graph asked for
+                    if throttle_waited + delay > max_throttle_wait:
+                        self.logger.error(f"{method} {api_url} needs {delay:.0f} more seconds of throttling wait, over the {max_throttle_wait}s budget ({throttle_waited:.0f}s already spent), giving up")
+                        raise Exception(f"Graph API request throttled beyond the {max_throttle_wait}s wait budget: {method} {url}")
+
                     time.sleep(delay)
+                    throttle_waited += delay
                 elif 500 <= response.status_code < 600:
                     attempt += 1
                     delay = self._parse_retry_after(response)  # 503 commonly carries one too

@@ -46,6 +46,7 @@ class FakeXdrPlatform:
         self.logger = FakeLogger()
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._tenant_id = "a-tenant"
+        self._max_throttle_wait = ms_xdr.DEFAULT_MAX_THROTTLE_WAIT
         # a token valid far enough in the future to skip any refresh
         self._token_cache = {"a-tenant": ("a-token", datetime.now() + timedelta(hours=1))}
 
@@ -103,15 +104,31 @@ def test_retry_after_http_date_is_honoured(platform, sleeps, monkeypatch):
     assert 15 <= sleeps[0] <= 20
 
 
-def test_retry_after_is_capped(platform, sleeps, monkeypatch):
+def test_long_retry_after_is_honoured_in_full(platform, sleeps, monkeypatch):
+    """CpuQuotaExceeded asks for minutes; waiting less just earns another 429"""
+    queue_responses(
+        monkeypatch,
+        [FakeResponse(429, {"Retry-After": "733"}), FakeResponse(200, body={"ok": True})],
+    )
+
+    body, status = platform._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    assert (body, status) == ({"ok": True}, 200)
+    assert sleeps == [733.0]
+
+
+def test_implausible_retry_after_is_capped_loudly(platform, sleeps, monkeypatch):
     queue_responses(
         monkeypatch,
         [FakeResponse(429, {"Retry-After": "99999"}), FakeResponse(200)],
     )
 
-    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+    platform._request_with_retries(
+        "POST", url="/security/runHuntingQuery", max_throttle_wait=7200
+    )
 
-    assert sleeps == [ms_xdr.MAX_RETRY_AFTER_SECONDS]
+    assert sleeps == [float(ms_xdr.MAX_RETRY_AFTER_SECONDS)]
+    assert any("implausibly long" in message for message in platform.logger.warnings)
 
 
 def test_unparsable_retry_after_falls_back_to_backoff(platform, sleeps, monkeypatch):
@@ -160,6 +177,42 @@ def test_persistent_throttling_eventually_gives_up(platform, sleeps, monkeypatch
         )
 
     assert sleeps == [1.0] * 3
+
+
+def test_repeated_long_waits_stop_at_the_budget(platform, sleeps, monkeypatch):
+    queue_responses(monkeypatch, [FakeResponse(429, {"Retry-After": "733"})] * 4)
+
+    with pytest.raises(Exception, match="wait budget"):
+        platform._request_with_retries(
+            "POST", url="/security/runHuntingQuery", max_throttle_wait=1800
+        )
+
+    # two waits fit in the budget, the third would overrun it
+    assert sleeps == [733.0, 733.0]
+
+
+def test_unaffordable_wait_fails_fast_without_sleeping(platform, sleeps, monkeypatch):
+    """Sleeping past the budget only to fail anyway would waste the whole wait"""
+    queue_responses(monkeypatch, [FakeResponse(429, {"Retry-After": "733"})])
+
+    with pytest.raises(Exception, match="wait budget"):
+        platform._request_with_retries(
+            "POST", url="/security/runHuntingQuery", max_throttle_wait=600
+        )
+
+    assert sleeps == []
+    assert any("733 more seconds" in message for message in platform.logger.errors)
+
+
+def test_throttle_wait_budget_comes_from_the_platform_parameters(monkeypatch, sleeps):
+    configured = FakeXdrPlatform()
+    configured._max_throttle_wait = 100
+    queue_responses(monkeypatch, [FakeResponse(429, {"Retry-After": "733"})])
+
+    with pytest.raises(Exception, match="beyond the 100s wait budget"):
+        configured._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    assert sleeps == []
 
 
 def test_debug_reports_the_throttling_reason(platform, sleeps, monkeypatch):
