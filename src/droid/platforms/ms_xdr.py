@@ -24,6 +24,16 @@ from typing import Optional, Callable
 # Upper bound applied to a Retry-After delay so a misbehaving header cannot stall a run
 MAX_RETRY_AFTER_SECONDS = 300
 
+# Budget headers Graph may attach to a throttled response, reported under --debug
+# to explain which limit was hit (https://learn.microsoft.com/en-us/graph/throttling)
+THROTTLING_HEADERS = (
+    "Retry-After",
+    "RateLimit-Limit",
+    "RateLimit-Remaining",
+    "RateLimit-Reset",
+    "x-ms-resource-unit",
+)
+
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
@@ -843,6 +853,45 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.error(f"Failed to acquire token from custom hook after {max_retries} attempts")
                     raise Exception(f"Token acquisition from custom hook failed: {str(e)}")
 
+    def _throttling_details(self, response) -> str:
+        """Summarise why Graph throttled the request, for --debug troubleshooting
+
+        Graph names the limit it enforced in the error body and reports the consumed
+        budget through the rate-limit headers. Neither is guaranteed to be present, so
+        every lookup here is best effort and the caller always gets a printable string.
+        """
+        details = []
+
+        try:
+            error = response.json().get("error") or {}
+        except ValueError:  # a gateway may answer 429 with something other than JSON
+            error = {}
+        inner_error = error.get("innerError") or {}
+
+        code = error.get("code") or inner_error.get("code")
+        if code:
+            details.append(f"code={code}")
+
+        message = error.get("message") or inner_error.get("message")
+        if message:
+            details.append(f"message={message}")
+
+        # Both ids are what Microsoft support asks for when a limit looks wrong
+        request_id = inner_error.get("request-id") or response.headers.get("request-id")
+        if request_id:
+            details.append(f"request-id={request_id}")
+        client_request_id = response.headers.get("client-request-id")
+        if client_request_id:
+            details.append(f"client-request-id={client_request_id}")
+
+        details.extend(
+            f"{header}={response.headers[header]}"
+            for header in THROTTLING_HEADERS
+            if response.headers.get(header)
+        )
+
+        return ", ".join(details) if details else "no details returned by Graph"
+
     def _parse_retry_after(self, response) -> Optional[float]:
         """Extract the Retry-After delay advertised by Microsoft Graph
 
@@ -914,6 +963,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     # on the advertised delay rather than to give up, and a burst of 429s
                     # should not consume the retries reserved for real failures.
                     throttle_attempt += 1
+                    self.logger.debug(f"Throttled on {method} {api_url}: {self._throttling_details(response)}")
                     if throttle_attempt > max_throttle_retries:
                         self.logger.error(f"{method} {api_url} still throttled after {max_throttle_retries} retries, giving up")
                         raise Exception(f"Graph API request throttled after {max_throttle_retries} retries: {method} {url}")

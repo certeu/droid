@@ -11,11 +11,12 @@ from droid.platforms import ms_xdr
 
 class FakeLogger:
     def __init__(self):
+        self.debugs = []
         self.warnings = []
         self.errors = []
 
     def debug(self, message, *args, **kwargs):
-        pass
+        self.debugs.append(message)
 
     def warning(self, message, *args, **kwargs):
         self.warnings.append(message)
@@ -38,6 +39,7 @@ class FakeXdrPlatform:
     """Minimal stand-in exposing only what _request_with_retries uses"""
 
     _parse_retry_after = ms_xdr.MicrosoftXDRPlatform._parse_retry_after
+    _throttling_details = ms_xdr.MicrosoftXDRPlatform._throttling_details
     _request_with_retries = ms_xdr.MicrosoftXDRPlatform._request_with_retries
 
     def __init__(self):
@@ -158,6 +160,77 @@ def test_persistent_throttling_eventually_gives_up(platform, sleeps, monkeypatch
         )
 
     assert sleeps == [1.0] * 3
+
+
+def test_debug_reports_the_throttling_reason(platform, sleeps, monkeypatch):
+    """The sample throttled response from the Graph throttling documentation"""
+    throttled = FakeResponse(
+        429,
+        {"Retry-After": "10", "RateLimit-Remaining": "0", "x-ms-resource-unit": "5"},
+        {
+            "error": {
+                "code": "TooManyRequests",
+                "message": "Please retry again later.",
+                "innerError": {
+                    "code": "429",
+                    "date": "2020-08-18T12:51:51",
+                    "message": "Please retry after",
+                    "request-id": "94fb3b52-452a-4535-a601-69e0a90e3aa2",
+                    "status": "429",
+                },
+            }
+        },
+    )
+    queue_responses(monkeypatch, [throttled, FakeResponse(200)])
+
+    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    reason = next(message for message in platform.logger.debugs if "Throttled on" in message)
+    assert "code=TooManyRequests" in reason
+    assert "message=Please retry again later." in reason
+    assert "request-id=94fb3b52-452a-4535-a601-69e0a90e3aa2" in reason
+    assert "Retry-After=10" in reason
+    assert "RateLimit-Remaining=0" in reason
+    assert "x-ms-resource-unit=5" in reason
+
+
+def test_throttling_reason_survives_a_non_json_body(platform, sleeps, monkeypatch):
+    """A gateway can answer 429 with HTML, which must not mask the throttling"""
+
+    class HtmlResponse(FakeResponse):
+        def json(self):
+            raise ValueError("not JSON")
+
+    queue_responses(
+        monkeypatch,
+        [HtmlResponse(429, {"Retry-After": "10"}), FakeResponse(200)],
+    )
+
+    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    reason = next(message for message in platform.logger.debugs if "Throttled on" in message)
+    assert "Retry-After=10" in reason
+    assert sleeps == [10.0]
+
+
+def test_throttling_reason_when_graph_says_nothing(platform, sleeps, monkeypatch):
+    queue_responses(monkeypatch, [FakeResponse(429), FakeResponse(200)])
+
+    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    reason = next(message for message in platform.logger.debugs if "Throttled on" in message)
+    assert "no details returned by Graph" in reason
+
+
+def test_throttling_reason_is_logged_before_giving_up(platform, sleeps, monkeypatch):
+    queue_responses(monkeypatch, [FakeResponse(429, {"Retry-After": "1"})] * 3)
+
+    with pytest.raises(Exception, match="throttled after 2 retries"):
+        platform._request_with_retries(
+            "POST", url="/security/runHuntingQuery", max_throttle_retries=2
+        )
+
+    assert len([m for m in platform.logger.debugs if "Throttled on" in m]) == 3
 
 
 def test_server_error_honours_retry_after(platform, sleeps, monkeypatch):
