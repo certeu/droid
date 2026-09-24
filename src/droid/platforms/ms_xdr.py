@@ -6,10 +6,10 @@ import re
 import requests
 import time
 import yaml
-import time
 
 from os import environ
-from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from droid.platforms.common import get_error_message, get_pipeline_group_match, get_token_hook_headers
@@ -20,6 +20,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.backends import default_backend
 from typing import Optional, Callable
+
+# Upper bound applied to a Retry-After delay so a misbehaving header cannot stall a run
+MAX_RETRY_AFTER_SECONDS = 300
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -840,7 +843,33 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.error(f"Failed to acquire token from custom hook after {max_retries} attempts")
                     raise Exception(f"Token acquisition from custom hook failed: {str(e)}")
 
-    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5):
+    def _parse_retry_after(self, response) -> Optional[float]:
+        """Extract the Retry-After delay advertised by Microsoft Graph
+
+        Graph documents Retry-After as the fastest way to recover from throttling
+        (https://learn.microsoft.com/en-us/graph/throttling). The header holds either a
+        number of seconds or an HTTP-date. Returns None when the header is absent or
+        cannot be understood, so the caller can fall back to its own backoff.
+        """
+        header = response.headers.get("Retry-After")
+        if not header:
+            return None
+
+        try:
+            delay = float(header)
+        except (TypeError, ValueError):
+            try:
+                retry_date = parsedate_to_datetime(header)
+            except (TypeError, ValueError):
+                self.logger.warning(f"Unparsable Retry-After header '{header}', falling back to the configured delay")
+                return None
+            if retry_date.tzinfo is None:  # an HTTP-date without offset is UTC
+                retry_date = retry_date.replace(tzinfo=timezone.utc)
+            delay = (retry_date - datetime.now(timezone.utc)).total_seconds()
+
+        return max(0.0, min(delay, MAX_RETRY_AFTER_SECONDS))
+
+    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5, max_throttle_retries=10):
         api_url = self._api_base_url + url
 
         if not tenant_id:
@@ -861,6 +890,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             request_headers.update(headers)
 
         attempt = 0
+        throttle_attempt = 0
         token_refreshed = False
         while attempt < max_retries:
             try:
@@ -880,13 +910,28 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 if response.status_code == 204:
                     return {}, response.status_code
                 elif response.status_code == 429:
-                    attempt += 1
-                    self.logger.warning(f"Rate limit reached, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
-                    time.sleep(retry_delay)
+                    # Throttling gets its own budget: Graph asks clients to keep retrying
+                    # on the advertised delay rather than to give up, and a burst of 429s
+                    # should not consume the retries reserved for real failures.
+                    throttle_attempt += 1
+                    if throttle_attempt > max_throttle_retries:
+                        self.logger.error(f"{method} {api_url} still throttled after {max_throttle_retries} retries, giving up")
+                        raise Exception(f"Graph API request throttled after {max_throttle_retries} retries: {method} {url}")
+                    delay = self._parse_retry_after(response)
+                    if delay is None:
+                        delay = min(retry_delay * (2 ** (throttle_attempt - 1)), MAX_RETRY_AFTER_SECONDS)
+                        self.logger.warning(f"Rate limit reached with no Retry-After header, backing off {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
+                    else:
+                        self.logger.warning(f"Rate limit reached, honouring Retry-After of {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
+                    time.sleep(delay)
                 elif 500 <= response.status_code < 600:
                     attempt += 1
-                    self.logger.warning(f"Server error {response.status_code}, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
-                    time.sleep(retry_delay)
+                    delay = self._parse_retry_after(response)  # 503 commonly carries one too
+                    if delay is None:
+                        delay = retry_delay
+                    self.logger.warning(f"Server error {response.status_code}, retrying in {delay:.0f} seconds (attempt {attempt}/{max_retries})")
+                    if attempt < max_retries:
+                        time.sleep(delay)
                 elif response.status_code == 401 and not token_refreshed:
                     self.logger.warning(f"Token expired for tenant {tenant_id}, refreshing token")
                     token, expiration = self.acquire_token(tenant_id)
