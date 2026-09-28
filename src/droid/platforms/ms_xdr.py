@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from droid.platforms.common import get_error_message, get_pipeline_group_match, get_token_hook_headers
+from droid.variants import customer_serves_variant
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
 from cryptography import x509
@@ -161,6 +162,30 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(f"Error while searching for rule id {rule_id} - {e}")
             raise
+
+    def report_orphan_variant(self, rule_content, rule_file, variant_name, customer_name, tenant_id):
+        """Report a rule left behind in a tenant that no longer carries its telemetry
+
+        Dropping a variant from a customer's allowlist stops droid deploying it,
+        but whatever was already pushed keeps running there against data the
+        customer no longer has. Removing it is deliberately not done here: only
+        the operator knows whether the leftover is stale or still wanted, and a
+        detection deleted by surprise is worse than one reported.
+        """
+
+        try:
+            existing_rule = self.get_rule(rule_content["id"], tenant_id)
+        except Exception as e:
+            self.logger.debug(f"Could not check for an orphan {variant_name} rule in tenant {tenant_id} - error: {e}")
+            return
+
+        if existing_rule:
+            self.logger.warning(
+                f"Orphan rule {rule_file} ({variant_name}) still deployed in tenant {tenant_id} "
+                f"for '{customer_name}', which no longer carries that telemetry. "
+                "Remove it manually if it is no longer wanted.",
+                extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
+            )
 
     def remove_rule(self, rule_content, rule_converted, rule_file):
         """
@@ -448,6 +473,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     tenant_id = info["tenant_id"]
                     customer_name = info.get("customer_name")
                     customer_filter_dir = info.get("customer_filters_directory")
+
+                    if not customer_serves_variant(rule_content, info):
+                        variant_name = rule_content["_droid_variant"]["name"]
+                        self.logger.debug(
+                            f"Skipping tenant {tenant_id} from group id {group}: "
+                            f"it does not carry the {variant_name} telemetry"
+                        )
+                        self.report_orphan_variant(rule_content, rule_file, variant_name,
+                                                   customer_name or tenant_id, tenant_id)
+                        continue
+
                     self.logger.debug(
                         f"Exporting to tenant {tenant_id} from group id {group}"
                     )

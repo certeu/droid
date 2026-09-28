@@ -1,0 +1,16 @@
+name: Splunk BitDefender process creation
+priority: 100
+
+# Purpose of this pipeline:
+# Serve the windows/process_creation rules from BitDefender telemetry instead of
+# Sysmon, for the customers whose data lands in the BitDefender indexes.
+
+transformations:
+  - id: bitdefender_index_condition
+    type: add_condition
+    conditions:
+      index: bitdefender_events
+    rule_conditions:
+      - type: logsource
+        category: process_creation
+        product: windows
