@@ -40,6 +40,7 @@ class FakeXdrPlatform:
 
     _parse_retry_after = ms_xdr.MicrosoftXDRPlatform._parse_retry_after
     _throttling_details = ms_xdr.MicrosoftXDRPlatform._throttling_details
+    _wait_out_throttling = ms_xdr.MicrosoftXDRPlatform._wait_out_throttling
     _request_with_retries = ms_xdr.MicrosoftXDRPlatform._request_with_retries
 
     def __init__(self):
@@ -47,6 +48,7 @@ class FakeXdrPlatform:
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._tenant_id = "a-tenant"
         self._max_throttle_wait = ms_xdr.DEFAULT_MAX_THROTTLE_WAIT
+        self._throttled_until = {}
         # a token valid far enough in the future to skip any refresh
         self._token_cache = {"a-tenant": ("a-token", datetime.now() + timedelta(hours=1))}
 
@@ -58,9 +60,16 @@ def platform():
 
 @pytest.fixture
 def sleeps(monkeypatch):
-    """Capture the delays instead of actually waiting for them"""
+    """Capture the delays instead of waiting, advancing a fake clock by each one"""
     recorded = []
-    monkeypatch.setattr(ms_xdr.time, "sleep", lambda seconds: recorded.append(seconds))
+    clock = {"now": 1000.0}
+
+    def fake_sleep(seconds):
+        recorded.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(ms_xdr.time, "sleep", fake_sleep)
+    monkeypatch.setattr(ms_xdr.time, "monotonic", lambda: clock["now"])
     return recorded
 
 
@@ -213,6 +222,97 @@ def test_throttle_wait_budget_comes_from_the_platform_parameters(monkeypatch, sl
         configured._request_with_retries("POST", url="/security/runHuntingQuery")
 
     assert sleeps == []
+
+
+def counting_responses(monkeypatch, responses):
+    """Serve the given responses, recording how many requests were actually sent"""
+    remaining = list(responses)
+    sent = []
+
+    def fake_post(*args, **kwargs):
+        sent.append(1)
+        return remaining.pop(0)
+
+    monkeypatch.setattr(ms_xdr.requests, "post", fake_post)
+    return sent
+
+
+def test_an_open_window_is_waited_out_by_the_next_request(platform, sleeps, monkeypatch):
+    """A tenant-wide quota must not be rediscovered with a fresh 429 per rule"""
+    sent = counting_responses(
+        monkeypatch,
+        [FakeResponse(429, {"Retry-After": "600"}), FakeResponse(200, body={"results": []})],
+    )
+
+    # the first rule learns the window but cannot afford it
+    with pytest.raises(Exception, match="wait budget"):
+        platform._request_with_retries(
+            "POST", url="/security/runHuntingQuery", max_throttle_wait=60
+        )
+    assert len(sent) == 1
+
+    # the next rule waits the window out rather than spending another 429 on it
+    body, status = platform._request_with_retries(
+        "POST", url="/security/runHuntingQuery", max_throttle_wait=3600
+    )
+
+    assert (body, status) == ({"results": []}, 200)
+    assert len(sent) == 2
+    assert sleeps == [600.0]
+    assert sum("throttled for another" in message for message in platform.logger.warnings) == 1
+
+
+def test_an_unaffordable_window_blocks_without_calling_graph(platform, sleeps, monkeypatch):
+    """Rules that cannot outlast the window must not keep hitting the quota"""
+    sent = counting_responses(monkeypatch, [FakeResponse(429, {"Retry-After": "600"})])
+
+    for _ in range(3):
+        with pytest.raises(Exception, match="wait budget"):
+            platform._request_with_retries(
+                "POST", url="/security/runHuntingQuery", max_throttle_wait=60
+            )
+
+    # only the first rule reached Graph; the rest were refused by the gate
+    assert len(sent) == 1
+    assert sleeps == []
+
+
+def test_the_window_is_tracked_per_tenant(platform, sleeps, monkeypatch):
+    """One customer being throttled must not stall the others in an MSSP run"""
+    sent = counting_responses(
+        monkeypatch,
+        [FakeResponse(429, {"Retry-After": "600"}), FakeResponse(200, body={"results": []})],
+    )
+    platform._token_cache["other-tenant"] = ("a-token", datetime.now() + timedelta(hours=1))
+
+    with pytest.raises(Exception, match="wait budget"):
+        platform._request_with_retries(
+            "POST", url="/security/runHuntingQuery", tenant_id="a-tenant", max_throttle_wait=60
+        )
+
+    body, status = platform._request_with_retries(
+        "POST", url="/security/runHuntingQuery", tenant_id="other-tenant"
+    )
+
+    assert status == 200
+    assert sleeps == []
+    assert len(sent) == 2
+
+
+def test_an_expired_window_is_forgotten(platform, sleeps, monkeypatch):
+    sent = counting_responses(
+        monkeypatch,
+        [FakeResponse(429, {"Retry-After": "600"}), FakeResponse(200), FakeResponse(200)],
+    )
+
+    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+    assert sleeps == [600.0]
+
+    # the window has been served, so the next request goes straight out
+    platform._request_with_retries("POST", url="/security/runHuntingQuery")
+
+    assert sleeps == [600.0]
+    assert len(sent) == 3
 
 
 def test_debug_reports_the_throttling_reason(platform, sleeps, monkeypatch):

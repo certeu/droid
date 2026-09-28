@@ -26,8 +26,9 @@ from typing import Optional, Callable
 MAX_RETRY_AFTER_SECONDS = 3600
 
 # Total time a single request may spend waiting on throttling before giving up.
-# Overridable per platform with the "max_throttle_wait" parameter.
-DEFAULT_MAX_THROTTLE_WAIT = 1800
+# Tenant quota windows run to ~35 minutes, so the budget has to clear one of them
+# for a run to survive it. Overridable with the "max_throttle_wait" parameter.
+DEFAULT_MAX_THROTTLE_WAIT = 3600
 
 # Budget headers Graph may attach to a throttled response, reported under --debug
 # to explain which limit was hit (https://learn.microsoft.com/en-us/graph/throttling)
@@ -96,6 +97,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token_cache = {}
+        # Monotonic deadline per tenant while a throttling window is known to be open
+        self._throttled_until = {}
 
     def set_convert_rule_callback(self, callback: Callable) -> None:
         """Set the callback function for converting rules with customer-specific filters
@@ -931,6 +934,37 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         return max(0.0, delay)
 
+    def _wait_out_throttling(self, tenant_id, method, url, api_url, throttle_waited, max_throttle_wait) -> float:
+        """Sleep off a throttling window already known to be open for this tenant
+
+        Graph quotas such as CpuQuotaExceeded are tenant-wide, so once one request has
+        been told to back off, every later one is refused for the same window. Holding
+        the whole platform here keeps a run over many rules from rediscovering the same
+        limit with a 429 per rule, each of which still accrues against the quota.
+
+        Returns the seconds spent waiting, and raises when that wait does not fit the
+        remaining budget.
+        """
+        deadline = self._throttled_until.get(tenant_id)
+        if deadline is None:
+            return 0.0
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            del self._throttled_until[tenant_id]
+            return 0.0
+
+        # Refuse a wait we cannot afford before spending any of it, and without
+        # sending a request that is certain to come back throttled
+        if throttle_waited + remaining > max_throttle_wait:
+            self.logger.error(f"{method} {api_url} needs {remaining:.0f} more seconds of throttling wait, over the {max_throttle_wait}s budget ({throttle_waited:.0f}s already spent), giving up")
+            raise Exception(f"Graph API request throttled beyond the {max_throttle_wait}s wait budget: {method} {url}")
+
+        self.logger.warning(f"Tenant is throttled for another {remaining:.0f} seconds, waiting it out before {method} {api_url}")
+        time.sleep(remaining)
+        del self._throttled_until[tenant_id]
+        return remaining
+
     def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5, max_throttle_retries=10, max_throttle_wait=None):
         api_url = self._api_base_url + url
 
@@ -960,6 +994,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         token_refreshed = False
         while attempt < max_retries:
             try:
+                throttle_waited += self._wait_out_throttling(tenant_id, method, url, api_url, throttle_waited, max_throttle_wait)
+
                 self.logger.debug(f"{method} {api_url} (attempt {attempt + 1}/{max_retries})")
                 if method == "GET":
                     response = requests.get(api_url, headers=request_headers, params=params, timeout=timeout)
@@ -991,14 +1027,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     else:
                         self.logger.warning(f"Rate limit reached, honouring Retry-After of {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
 
-                    # Sleeping past the budget only to fail anyway wastes the whole wait,
-                    # so refuse the wait we cannot afford and report what Graph asked for
-                    if throttle_waited + delay > max_throttle_wait:
-                        self.logger.error(f"{method} {api_url} needs {delay:.0f} more seconds of throttling wait, over the {max_throttle_wait}s budget ({throttle_waited:.0f}s already spent), giving up")
-                        raise Exception(f"Graph API request throttled beyond the {max_throttle_wait}s wait budget: {method} {url}")
-
-                    time.sleep(delay)
-                    throttle_waited += delay
+                    # Record the window for the whole tenant rather than sleeping here:
+                    # the gate at the top of the loop serves this retry, and every later
+                    # request for the tenant waits on it instead of earning its own 429
+                    self._throttled_until[tenant_id] = time.monotonic() + delay
                 elif 500 <= response.status_code < 600:
                     attempt += 1
                     delay = self._parse_retry_after(response)  # 503 commonly carries one too
