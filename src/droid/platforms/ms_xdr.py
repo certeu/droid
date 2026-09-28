@@ -6,10 +6,10 @@ import re
 import requests
 import time
 import yaml
-import time
 
 from os import environ
-from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from droid.platforms.common import get_error_message, get_pipeline_group_match, get_token_hook_headers
@@ -20,6 +20,24 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.backends import default_backend
 from typing import Optional, Callable
+
+# Sanity bound on a single Retry-After delay. Graph quota windows are minutes, not
+# hours, so anything above this is a malformed header rather than a real wait.
+MAX_RETRY_AFTER_SECONDS = 3600
+
+# Total time a single request may spend waiting on throttling before giving up.
+# Overridable per platform with the "max_throttle_wait" parameter.
+DEFAULT_MAX_THROTTLE_WAIT = 1800
+
+# Budget headers Graph may attach to a throttled response, reported under --debug
+# to explain which limit was hit (https://learn.microsoft.com/en-us/graph/throttling)
+THROTTLING_HEADERS = (
+    "Retry-After",
+    "RateLimit-Limit",
+    "RateLimit-Remaining",
+    "RateLimit-Reset",
+    "x-ms-resource-unit",
+)
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -74,6 +92,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Conversion callback for re-converting rules with customer-specific filters
         self._convert_rule_callback: Optional[Callable] = None
         
+        self._max_throttle_wait = self._parameters.get("max_throttle_wait", DEFAULT_MAX_THROTTLE_WAIT)
+
         self._api_base_url = "https://graph.microsoft.com/beta"
         self._token_cache = {}
 
@@ -840,8 +860,82 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     self.logger.error(f"Failed to acquire token from custom hook after {max_retries} attempts")
                     raise Exception(f"Token acquisition from custom hook failed: {str(e)}")
 
-    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5):
+    def _throttling_details(self, response) -> str:
+        """Summarise why Graph throttled the request, for --debug troubleshooting
+
+        Graph names the limit it enforced in the error body and reports the consumed
+        budget through the rate-limit headers. Neither is guaranteed to be present, so
+        every lookup here is best effort and the caller always gets a printable string.
+        """
+        details = []
+
+        try:
+            error = response.json().get("error") or {}
+        except ValueError:  # a gateway may answer 429 with something other than JSON
+            error = {}
+        inner_error = error.get("innerError") or {}
+
+        code = error.get("code") or inner_error.get("code")
+        if code:
+            details.append(f"code={code}")
+
+        message = error.get("message") or inner_error.get("message")
+        if message:
+            details.append(f"message={message}")
+
+        # Both ids are what Microsoft support asks for when a limit looks wrong
+        request_id = inner_error.get("request-id") or response.headers.get("request-id")
+        if request_id:
+            details.append(f"request-id={request_id}")
+        client_request_id = response.headers.get("client-request-id")
+        if client_request_id:
+            details.append(f"client-request-id={client_request_id}")
+
+        details.extend(
+            f"{header}={response.headers[header]}"
+            for header in THROTTLING_HEADERS
+            if response.headers.get(header)
+        )
+
+        return ", ".join(details) if details else "no details returned by Graph"
+
+    def _parse_retry_after(self, response) -> Optional[float]:
+        """Extract the Retry-After delay advertised by Microsoft Graph
+
+        Graph documents Retry-After as the fastest way to recover from throttling
+        (https://learn.microsoft.com/en-us/graph/throttling). The header holds either a
+        number of seconds or an HTTP-date. Returns None when the header is absent or
+        cannot be understood, so the caller can fall back to its own backoff.
+        """
+        header = response.headers.get("Retry-After")
+        if not header:
+            return None
+
+        try:
+            delay = float(header)
+        except (TypeError, ValueError):
+            try:
+                retry_date = parsedate_to_datetime(header)
+            except (TypeError, ValueError):
+                self.logger.warning(f"Unparsable Retry-After header '{header}', falling back to the configured delay")
+                return None
+            if retry_date.tzinfo is None:  # an HTTP-date without offset is UTC
+                retry_date = retry_date.replace(tzinfo=timezone.utc)
+            delay = (retry_date - datetime.now(timezone.utc)).total_seconds()
+
+        if delay > MAX_RETRY_AFTER_SECONDS:
+            # Never clamp silently: retrying before the window Graph named just earns
+            # another 429, and every retry accrues against the tenant quota
+            self.logger.warning(f"Graph asked to wait {delay:.0f} seconds, which is implausibly long, capping at {MAX_RETRY_AFTER_SECONDS} seconds")
+            return float(MAX_RETRY_AFTER_SECONDS)
+
+        return max(0.0, delay)
+
+    def _request_with_retries(self, method, url=None, payload=None, headers=None, params=None, tenant_id=None, timeout=60, retry_delay=30, max_retries=5, max_throttle_retries=10, max_throttle_wait=None):
         api_url = self._api_base_url + url
+
+        if max_throttle_wait is None:
+            max_throttle_wait = self._max_throttle_wait
 
         if not tenant_id:
             tenant_id = self._tenant_id
@@ -861,6 +955,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             request_headers.update(headers)
 
         attempt = 0
+        throttle_attempt = 0
+        throttle_waited = 0.0
         token_refreshed = False
         while attempt < max_retries:
             try:
@@ -880,13 +976,37 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 if response.status_code == 204:
                     return {}, response.status_code
                 elif response.status_code == 429:
-                    attempt += 1
-                    self.logger.warning(f"Rate limit reached, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
-                    time.sleep(retry_delay)
+                    # Throttling gets its own budget: Graph asks clients to keep retrying
+                    # on the advertised delay rather than to give up, and a burst of 429s
+                    # should not consume the retries reserved for real failures.
+                    throttle_attempt += 1
+                    self.logger.debug(f"Throttled on {method} {api_url}: {self._throttling_details(response)}")
+                    if throttle_attempt > max_throttle_retries:
+                        self.logger.error(f"{method} {api_url} still throttled after {max_throttle_retries} retries, giving up")
+                        raise Exception(f"Graph API request throttled after {max_throttle_retries} retries: {method} {url}")
+                    delay = self._parse_retry_after(response)
+                    if delay is None:
+                        delay = min(retry_delay * (2 ** (throttle_attempt - 1)), MAX_RETRY_AFTER_SECONDS)
+                        self.logger.warning(f"Rate limit reached with no Retry-After header, backing off {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
+                    else:
+                        self.logger.warning(f"Rate limit reached, honouring Retry-After of {delay:.0f} seconds (throttle retry {throttle_attempt}/{max_throttle_retries})")
+
+                    # Sleeping past the budget only to fail anyway wastes the whole wait,
+                    # so refuse the wait we cannot afford and report what Graph asked for
+                    if throttle_waited + delay > max_throttle_wait:
+                        self.logger.error(f"{method} {api_url} needs {delay:.0f} more seconds of throttling wait, over the {max_throttle_wait}s budget ({throttle_waited:.0f}s already spent), giving up")
+                        raise Exception(f"Graph API request throttled beyond the {max_throttle_wait}s wait budget: {method} {url}")
+
+                    time.sleep(delay)
+                    throttle_waited += delay
                 elif 500 <= response.status_code < 600:
                     attempt += 1
-                    self.logger.warning(f"Server error {response.status_code}, retrying in {retry_delay} seconds (attempt {attempt}/{max_retries})")
-                    time.sleep(retry_delay)
+                    delay = self._parse_retry_after(response)  # 503 commonly carries one too
+                    if delay is None:
+                        delay = retry_delay
+                    self.logger.warning(f"Server error {response.status_code}, retrying in {delay:.0f} seconds (attempt {attempt}/{max_retries})")
+                    if attempt < max_retries:
+                        time.sleep(delay)
                 elif response.status_code == 401 and not token_refreshed:
                     self.logger.warning(f"Token expired for tenant {tenant_id}, refreshing token")
                     token, expiration = self.acquire_token(tenant_id)
