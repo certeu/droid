@@ -4,6 +4,7 @@ Tests of the convert command
 
 import pytest
 
+from pathlib import Path
 from typer.testing import CliRunner
 from droid.__main__ import app
 
@@ -48,6 +49,27 @@ def test_convert_valid_file_with_customer_filter():
     """Test conversion of valid sigma rule with customer-specific filter applied"""
     result = runner.invoke(app, ["rules", "convert", "--platform", "microsoft_xdr", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config.toml", "--mssp"])
     assert result.exit_code == 0
+
+    # An exit code of 0 alone would also be had from a filter that never applied
+    assert 'not(DeviceName startswith "DC-")' in result.stdout
+
+def test_convert_emits_one_query_per_variant():
+    """A log source served by two telemetry sources converts to two queries.
+
+    Without the fan-out, get_pipeline_config_group breaks on the first matching
+    group and the third-party EDR query is never produced at all.
+    """
+    result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config_variants.toml"])
+    assert result.exit_code == 0
+    assert 'index="windows_sysmon"' in result.stdout
+    assert 'index="edr_events"' in result.stdout
+
+def test_convert_single_group_config_still_emits_one_query():
+    """Configs predating variants must be untouched by the fan-out."""
+    result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config_custom_pipelines.toml"])
+    assert result.exit_code == 0
+    assert result.stdout.count('index="windows_sysmon"') == 1
+    assert 'index="edr_events"' not in result.stdout
 
 def test_file_has_correlation_detects_in_multidoc():
     """_file_has_correlation must scan every YAML document, not only the first."""
@@ -362,3 +384,41 @@ def test_search_rule_short_circuits_on_correlation_ignore_search(tmp_path):
     )
     assert error is False
     assert search_warning is False
+def test_convert_mssp_shows_each_customer_only_their_variants():
+    """MSSP convert must fan out per variant, narrowed by each customer's telemetry.
+
+    Zoidberg carries both sources; Slurm only carries the third-party EDR and
+    must never be shown (nor later sent) the native Defender query.
+    """
+    result = runner.invoke(app, ["--debug", "rules", "convert", "--platform", "microsoft_xdr", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config_variants_mssp.toml", "--mssp"])
+    assert result.exit_code == 0
+
+    # The labels are logged, the queries written to stdout, so each section runs
+    # from a customer's label up to the next one.
+    zoidberg = result.stdout.split("Zoidberg", 1)[1].split("Slurm", 1)[0]
+    slurm = result.stdout.split("Slurm", 1)[1]
+
+    # A failed conversion names the table in its error, so the counts below would
+    # be just as happy with two errors as with two queries
+    assert "Conversion failed" not in result.stdout
+
+    # Zoidberg carries both telemetry sources, both filtered
+    assert "thirdparty_edr" in zoidberg
+    assert zoidberg.count("DeviceProcessEvents") == 2
+    assert zoidberg.count('not(DeviceName startswith "DC-")') == 2
+
+    # Slurm carries only the third-party EDR and must never see the native query
+    assert "thirdparty_edr" in slurm
+    assert slurm.count("DeviceProcessEvents") == 1
+
+def test_convert_honours_the_platform_wide_variant_allowlist(tmp_path):
+    """A deployment carrying only one of the declared sources converts only that one."""
+    config = Path("tests/files/test_config_variants.toml").read_text()
+    config = config.replace('[platforms.splunk]\n', '[platforms.splunk]\n\nvariants = ["edr"]\n')
+    narrowed = tmp_path / "narrowed.toml"
+    narrowed.write_text(config)
+
+    result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", str(narrowed)])
+    assert result.exit_code == 0
+    assert 'index="edr_events"' in result.stdout
+    assert 'index="windows_sysmon"' not in result.stdout

@@ -1,0 +1,16 @@
+name: XDR third-party process creation
+priority: 100
+
+# Purpose of this pipeline:
+# Serve the windows/process_creation rules from a third-party EDR's events
+# rather than the native Defender telemetry.
+
+transformations:
+  - id: thirdparty_condition
+    type: add_condition
+    conditions:
+      ReportId: thirdparty_edr
+    rule_conditions:
+      - type: logsource
+        category: process_creation
+        product: windows

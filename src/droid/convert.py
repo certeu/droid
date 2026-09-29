@@ -19,6 +19,13 @@ from droid.platforms.elastic import ElasticPlatform
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 from droid.rule_loader import load_rule_content
+from droid.variants import (
+    Variant,
+    VariantConfigError,
+    resolve_variants,
+    select_variants,
+    variant_rule_content,
+)
 
 class Conversion:
     """Base class handling the conversion
@@ -29,34 +36,48 @@ class Conversion:
     def __init__(self, parameters: dict, base_config, platform_name, logger_param) -> None:
         self.logger = ColorLogger(__name__, **logger_param)
         self._parameters = parameters["pipelines"]
+        self._platform_variants = parameters.get("variants")
         self._filters_directory = base_config.get("sigma_filters_directory", None)
         self._platform_name = platform_name
         self._logger_param = logger_param
 
-    def get_pipeline_config_group(self, rule_content):
-        """Retrieve the logsource config group name
-        Search a match in the configuration in platforms.x.pipelines and fetch the pipeline group name
+    def select_rule_variants(self, rule_content, variant_allowlist=None) -> list[Variant]:
+        """Resolve the telemetry variants serving a rule's log source
 
-        Return: a str with the pipeline config group
+        A log source can be served by more than one pipeline group — Sysmon and
+        a third-party EDR for windows/process_creation — and each produces its
+        own query deployed as its own object.
+
+        Args:
+            rule_content: The parsed rule content dictionary
+            variant_allowlist: Optional list of variant names a target carries,
+                               falling back to the platform-wide allowlist
+
+        Return: a list of Variant, primary first, empty when the rule is unsupported
         """
 
-        sigma_logsource_fields = ["category", "product", "service"]
-        rule_logsource = {}
+        variants = resolve_variants(rule_content, self._parameters)
 
-        for key, value in rule_content["logsource"].items():
-            if key in sigma_logsource_fields:
-                rule_logsource[key] = value
+        if not variants:
+            return []
 
-        for key, value in self._parameters.items():
-            value = {k: v for k, v in value.items()  if k in sigma_logsource_fields}
-            if value == rule_logsource:
-                self.logger.info(f"Pipeline config found: {key}")
-                group_match = key
-                break
-            else:
-                group_match = None
+        allowlist = variant_allowlist if variant_allowlist is not None else self._platform_variants
+        selected = select_variants(variants, allowlist)
 
-        return group_match
+        for variant in selected:
+            self.logger.info(f"Pipeline config found: {variant.group}")
+
+        return selected
+
+    def get_pipeline_config_group(self, rule_content):
+        """Retrieve the logsource config group name of the primary variant
+
+        Return: a str with the pipeline config group, or None when unsupported
+        """
+
+        variants = resolve_variants(rule_content, self._parameters)
+
+        return variants[0].group if variants else None
 
     def ms_cloud_kusto(self) -> str | None:
         """Function to select the right Kusto backend
@@ -169,16 +190,43 @@ class Conversion:
     def convert_rule(self, rule_content, rule_file, platform, customer_filter_directory: Optional[str] = None):
         """Convert a Sigma rule to the target platform query language
 
+        When `rule_content` already carries a variant — i.e. it came out of
+        `variant_rule_content` — it is converted with that variant's pipeline
+        group. Otherwise the primary variant of its log source is used, which is
+        the only variant a config predating this feature ever has.
+
         Args:
             rule_content: The parsed rule content dictionary
             rule_file: Path to the rule file
             platform: The target platform instance
             customer_filter_directory: Optional customer-specific filter directory for MSSP mode
         """
+        declared_variant = rule_content.get("_droid_variant")
+
+        if declared_variant:
+            pipeline_params = declared_variant["config"]
+        else:
+            variants = resolve_variants(rule_content, self._parameters)
+            if not variants:
+                self.logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
+                return None
+            self.logger.info(f"Pipeline config found: {variants[0].group}")
+            pipeline_params = variants[0].config
+
+        return self._convert_for_group(
+            rule_content, rule_file, platform, pipeline_params, customer_filter_directory
+        )
+
+    def _convert_for_group(self, rule_content, rule_file, platform, pipeline_params,
+                           customer_filter_directory: Optional[str] = None):
+        """Convert a Sigma rule using one pipeline config group
+
+        Return: a str with the converted query, or None when the rule cannot be
+        converted for this group
+        """
         plugins = InstalledSigmaPlugins.autodiscover()
         backends = plugins.backends
         pipeline_resolver = plugins.get_pipeline_resolver()
-        pipeline_config_group = self.get_pipeline_config_group(rule_content)
 
         backend_name = self.ms_cloud_kusto() or self._platform_name
         if backend_name not in backends:
@@ -187,65 +235,57 @@ class Conversion:
 
         # Pipeline config
 
-        if pipeline_config_group:
-            rule_supported = True
-            pipeline_params = self._parameters[pipeline_config_group]
-            # Correlation rules can override both the pipelines list (`pipelines_correlation`)
-            # and the output format (`format_correlation`) to fall back to a
-            # non-data-model pipeline + default format because data_model finalizers don't
-            # work on correlation rules.
-            is_correlation_rule = "correlation" in rule_content or self._file_has_correlation(rule_file)
-            if is_correlation_rule and "pipelines_correlation" in pipeline_params:
-                pipeline_config = pipeline_params["pipelines_correlation"]
-            else:
-                pipeline_config = pipeline_params["pipelines"]
-            if is_correlation_rule and "format_correlation" in pipeline_params:
-                self._format = pipeline_params["format_correlation"]
-            elif "format" in pipeline_params:
-                self._format = pipeline_params["format"]
-            else:
-                self._format = "default"
+        # Correlation rules can override both the pipelines list (`pipelines_correlation`)
+        # and the output format (`format_correlation`) to fall back to a
+        # non-data-model pipeline + default format because data_model finalizers don't
+        # work on correlation rules.
+        is_correlation_rule = "correlation" in rule_content or self._file_has_correlation(rule_file)
+        if is_correlation_rule and "pipelines_correlation" in pipeline_params:
+            pipeline_config = pipeline_params["pipelines_correlation"]
         else:
-            rule_supported = False
-
-        if rule_supported:
-            # Check for incompatible combination: Splunk datamodel format with regex modifiers
-            if (self._platform_name == "splunk"
-                    and self._format == "data_model"
-                    and self._rule_has_regex_modifier(rule_content)):
-                self.logger.warning(
-                    f"Rule not compatible: {rule_file} - "
-                    "Splunk datamodel format does not support the |re (regex) modifier. "
-                    "Use a different output format or remove the regex modifier from the rule.",
-                    # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/60
-                    extra={"rule_file": rule_file, "rule_content": rule_content}
-                )
-                return None
-
-            backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
-            if pipeline_config:
-                pipeline = pipeline_resolver.resolve(pipeline_config)
-            else:
-                pipeline = None
-            backend: Backend = backend_class(processing_pipeline=pipeline)
-
-            # Log filter application details
-            if customer_filter_directory and self._filters_directory:
-                self.logger.info(f"Applying default filters + customer-specific filters from {customer_filter_directory}")
-            elif customer_filter_directory:
-                self.logger.info(f"Applying customer-specific filters from {customer_filter_directory}")
-            elif self._filters_directory:
-                self.logger.debug(f"Applying default filters from {self._filters_directory}")
-
-            sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
-            rule_converted = backend.convert(sigma_rule, self._format)[0]
-            # For esql and eql backend only
-            if isinstance(platform, ElasticPlatform):
-                platform.get_index_name(pipeline, rule_content)
-            self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
-            return rule_converted
+            pipeline_config = pipeline_params["pipelines"]
+        if is_correlation_rule and "format_correlation" in pipeline_params:
+            self._format = pipeline_params["format_correlation"]
+        elif "format" in pipeline_params:
+            self._format = pipeline_params["format"]
         else:
-            self.logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
+            self._format = "default"
+
+        # Check for incompatible combination: Splunk datamodel format with regex modifiers
+        if (self._platform_name == "splunk"
+                and self._format == "data_model"
+                and self._rule_has_regex_modifier(rule_content)):
+            self.logger.warning(
+                f"Rule not compatible: {rule_file} - "
+                "Splunk datamodel format does not support the |re (regex) modifier. "
+                "Use a different output format or remove the regex modifier from the rule.",
+                # https://github.com/SigmaHQ/pySigma-backend-splunk/issues/60
+                extra={"rule_file": rule_file, "rule_content": rule_content}
+            )
+            return None
+
+        backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
+        if pipeline_config:
+            pipeline = pipeline_resolver.resolve(pipeline_config)
+        else:
+            pipeline = None
+        backend: Backend = backend_class(processing_pipeline=pipeline)
+
+        # Log filter application details
+        if customer_filter_directory and self._filters_directory:
+            self.logger.info(f"Applying default filters + customer-specific filters from {customer_filter_directory}")
+        elif customer_filter_directory:
+            self.logger.info(f"Applying customer-specific filters from {customer_filter_directory}")
+        elif self._filters_directory:
+            self.logger.debug(f"Applying default filters from {self._filters_directory}")
+
+        sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
+        rule_converted = backend.convert(sigma_rule, self._format)[0]
+        # For esql and eql backend only
+        if isinstance(platform, ElasticPlatform):
+            platform.get_index_name(pipeline, rule_content)
+        self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
+        return rule_converted
 
 def load_rule(rule_file):
 
@@ -270,6 +310,94 @@ def convert_sigma_rule(rule_file, parameters, logger, sigma_objects, target, pla
     sigma_objects[rule_content["title"]] = rule_content
     error, search_warning = convert_sigma(parameters, logger, rule_content, rule_file, target, platform, error, search_warning, rules, logger_param)
     return error, search_warning
+
+def _render_mssp_conversions(rule_file, rule_content, target, platform, export_list_mssp, logger):
+    """Render the DEFAULT conversion and every customer's, one query per variant
+
+    A log source can be served by several telemetry sources, and a customer only
+    carries some of them. What a customer actually gets deployed is therefore the
+    intersection of the rule's variants and their own `variants` allowlist —
+    rendering the whole fan-out would advertise queries that will never reach
+    their workspace.
+
+    Return: True when a conversion failed, False otherwise
+    """
+
+    logger.info(f"Converting rule: {rule_file}")
+
+    try:
+        variants = target.select_rule_variants(rule_content)
+    except VariantConfigError as e:
+        logger.error(f"Invalid variant configuration for {rule_file} - error: {e}",
+                     extra={"rule_file": rule_file, "rule_content": rule_content, "error": e})
+        return True
+
+    if not variants:
+        logger.warning(f"Rule not supported: {rule_file}",
+                       extra={"rule_file": rule_file, "rule_content": rule_content})
+        return False
+
+    error = False
+
+    for variant in variants:
+        try:
+            converted = target.convert_rule(variant_rule_content(rule_content, variant), rule_file, platform)
+        except Exception as e:
+            logger.error(f"  [DEFAULT{_variant_label(variant, variants)}] Conversion failed: {e}")
+            error = True
+            continue
+
+        # convert_rule returns None when the rule is unsupported; the warning is
+        # already emitted inside convert_rule, so there is nothing left to render.
+        if converted is None:
+            continue
+
+        logger.info(f"  [DEFAULT{_variant_label(variant, variants)}]")
+        sys.stdout.write(converted + "\n")
+
+    for group, info in export_list_mssp.items():
+        customer_name = info.get('customer_name', group)
+        customer_filter_dir = info.get('customer_filters_directory')
+
+        try:
+            customer_variants = target.select_rule_variants(rule_content, info.get('variants'))
+        except VariantConfigError as e:
+            logger.warning(f"  [{customer_name}] Invalid variant configuration: {e}")
+            error = True
+            continue
+
+        # Without filters *and* with the same telemetry as the default, the
+        # customer's queries are character for character the default ones.
+        if not customer_filter_dir and customer_variants == variants:
+            logger.info(f"  [{customer_name}] No filters configured - same as default")
+            continue
+
+        for variant in customer_variants:
+            try:
+                converted = target.convert_rule(
+                    variant_rule_content(rule_content, variant), rule_file, platform, customer_filter_dir
+                )
+            except Exception as e:
+                logger.warning(f"  [{customer_name}{_variant_label(variant, variants)}] Conversion failed: {e}")
+                error = True
+                continue
+
+            if converted is None:
+                continue
+
+            logger.info(f"  [{customer_name}{_variant_label(variant, variants)}]")
+            sys.stdout.write(converted + "\n")
+
+    return error
+
+def _variant_label(variant, variants):
+    """Name the variant only once there is more than one to tell apart
+
+    A log source served by a single telemetry source keeps the bare label it has
+    always been rendered under.
+    """
+
+    return "" if len(variants) == 1 else f" / {variant.name}"
 
 def convert_rules(parameters, droid_config, base_config, logger_param):
 
@@ -302,86 +430,13 @@ def convert_rules(parameters, droid_config, base_config, logger_param):
             # Process rules for each customer
             if path.is_dir():
                 for rule_file in path.rglob("*.y*ml"):
-                    rule_content = load_rule(rule_file)
-                    logger.info(f"Converting rule: {rule_file}")
-
-                    # First show default conversion (no customer filters)
-                    try:
-                        default_converted = target.convert_rule(rule_content, rule_file, platform)
-                    except Exception as e:
-                        logger.error(f"  [DEFAULT] Conversion failed: {e}")
-                        continue
-
-                    # convert_rule returns None when the rule is unsupported; the warning
-                    # is already emitted inside convert_rule, so skip the rest of the
-                    # customers — there is nothing to render.
-                    if default_converted is None:
-                        continue
-
-                    logger.info("  [DEFAULT]")
-                    sys.stdout.write(default_converted + "\n")
-
-                    # Then convert for each customer with their filters
-                    for group, info in export_list_mssp.items():
-                        customer_name = info.get('customer_name', group)
-                        customer_filter_dir = info.get('customer_filters_directory')
-
-                        if customer_filter_dir:
-                            try:
-                                customer_converted = target.convert_rule(
-                                    rule_content, rule_file, platform, customer_filter_dir
-                                )
-                            except Exception as e:
-                                logger.warning(f"  [{customer_name}] Conversion failed: {e}")
-                                continue
-                            if customer_converted is None:
-                                continue
-                            logger.info(f"  [{customer_name}]")
-                            sys.stdout.write(customer_converted + "\n")
-                        else:
-                            logger.info(f"  [{customer_name}] No filters configured - same as default")
-
+                    if _render_mssp_conversions(rule_file, load_rule(rule_file), target, platform, export_list_mssp, logger):
+                        error = True
                     print()  # Empty line between rules for readability
 
             elif path.is_file():
-                rule_file = path
-                rule_content = load_rule(rule_file)
-                logger.info(f"Converting rule: {rule_file}")
+                error = _render_mssp_conversions(path, load_rule(path), target, platform, export_list_mssp, logger)
 
-                # First show default conversion (no customer filters)
-                try:
-                    default_converted = target.convert_rule(rule_content, rule_file, platform)
-                except Exception as e:
-                    logger.error(f"  [DEFAULT] Conversion failed: {e}")
-                    return True, search_warning
-
-                # Unsupported rule: warning already logged by convert_rule; nothing to render.
-                if default_converted is None:
-                    return error, search_warning
-
-                logger.info("  [DEFAULT]")
-                sys.stdout.write(default_converted + "\n")
-
-                # Then convert for each customer with their filters
-                for group, info in export_list_mssp.items():
-                    customer_name = info.get('customer_name', group)
-                    customer_filter_dir = info.get('customer_filters_directory')
-
-                    if customer_filter_dir:
-                        try:
-                            customer_converted = target.convert_rule(
-                                rule_content, rule_file, platform, customer_filter_dir
-                            )
-                        except Exception as e:
-                            logger.warning(f"  [{customer_name}] Conversion failed: {e}")
-                            continue
-                        if customer_converted is None:
-                            continue
-                        logger.info(f"  [{customer_name}]")
-                        sys.stdout.write(customer_converted + "\n")
-                    else:
-                        logger.info(f"  [{customer_name}] No filters configured - same as default")
-            
             return error, search_warning
 
     if parameters.platform and (parameters.search or parameters.export or parameters.integrity):
@@ -444,6 +499,42 @@ def convert_sigma(
         rule_file, target, platform,
         error, search_warning, rules,
         logger_param):
+    """Convert and dispatch a rule, once per telemetry variant of its log source
+
+    Each variant is converted, searched, exported and checked independently, so
+    a pipeline that breaks for one telemetry source never costs the others.
+    """
+
+    try:
+        variants = target.select_rule_variants(rule_content)
+    except VariantConfigError as e:
+        logger.error(f"Invalid variant configuration for {rule_file} - error: {e}", extra={"rule_file": rule_file, "error": e, "rule_content": rule_content})
+        return True, search_warning
+
+    if not variants:
+        logger.warning(f"Rule not supported: {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content})
+        return error, search_warning
+
+    for variant in variants:
+        error, search_warning = convert_sigma_variant(
+            parameters, logger, variant_rule_content(rule_content, variant),
+            rule_file, target, platform,
+            error, search_warning, rules,
+            logger_param)
+
+    return error, search_warning
+
+
+def convert_sigma_variant(
+        parameters, logger, rule_content,
+        rule_file, target, platform,
+        error, search_warning, rules,
+        logger_param):
+    """Convert and dispatch one telemetry variant of a rule
+
+    `rule_content` is the variant's own content: its `id` and `title` already
+    carry the identity this variant deploys under.
+    """
 
     try:
         rule_converted = target.convert_rule(rule_content, rule_file, platform)
@@ -513,6 +604,7 @@ def convert_sigma(
 
     elif parameters.module:
         rules.append(rule_converted)
+        return error, search_warning
 
     else:
         return error, search_warning

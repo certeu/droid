@@ -1,0 +1,55 @@
+# This is a TOML document config exercising log source variants in MSSP mode
+#
+# windows/process_creation is served by two telemetry sources. Zoidberg carries
+# both; Slurm only carries the third-party EDR and must not be sent the native
+# Defender query at all.
+
+title = "droid configuration file"
+
+[base]
+
+raw_rules_directory = "rules-raw"
+sigma_validation_config = "tests/files/test_validate.yml"
+
+[platforms]
+
+[platforms.microsoft_xdr]
+
+alert_prefix = "[PIZZA]"
+
+days_ago = 30
+timeout = 120
+query_period = "0"
+
+search_auth = "default"
+export_auth = "default"
+
+[platforms.microsoft_xdr.pipelines.windows_process_creation]
+
+pipelines = ["microsoft_365_defender"]
+product = "windows"
+category = "process_creation"
+variant = "defender"
+primary = true
+
+[platforms.microsoft_xdr.pipelines.windows_process_creation_thirdparty]
+
+pipelines = ["microsoft_365_defender", "tests/files/pipelines/xdr_process_creation_thirdparty.yml"]
+product = "windows"
+category = "process_creation"
+variant = "thirdparty"
+
+    [platforms.microsoft_xdr.export_list_mssp]
+
+        [platforms.microsoft_xdr.export_list_mssp.Zoidberg]
+
+        tenant_id = "406a174b-e315-48bd-aa0a-cdaddc44250b"
+        customer_name = "Zoidberg"
+        customer_filters_directory = "tests/files/filters/zoidberg"
+        variants = ["defender", "thirdparty"]
+
+        [platforms.microsoft_xdr.export_list_mssp.Slurm]
+
+        tenant_id = "b3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+        customer_name = "Slurm"
+        variants = ["thirdparty"]

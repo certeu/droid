@@ -55,6 +55,69 @@ def get_error_message(response):
 
     return str(response)
 
+def get_suppress_fields(rule_content: dict, suppress_fields_groups: dict):
+    """Resolve the alert suppression fields for a rule
+
+    Suppression fields are named per log source, but a log source can be served
+    by several telemetry sources whose schemas differ — suppressing a Sysmon
+    rule on `Computer` says nothing about the same detection over third-party
+    EDR data. A variant pipeline group may therefore declare its own
+    `alert.suppress.fields`, which takes precedence over the log-source-wide
+    ones. A variant that shares the primary's schema simply inherits them.
+
+    Return: a str with the suppression fields, or None when none apply
+    """
+
+    variant_config = rule_content.get('_droid_variant', {}).get('config', {})
+    if 'alert.suppress.fields' in variant_config:
+        return variant_config['alert.suppress.fields']
+
+    group = get_pipeline_group_match(rule_content, suppress_fields_groups)
+    if group:
+        return suppress_fields_groups[group]['alert.suppress.fields']
+
+    return None
+
+
+def get_search_days_ago(rule_content: dict, default, logger, maximum: int = None):
+    """Resolve the lookback of a search, in days
+
+    The platform parameters set one lookback for every rule, which rarely suits
+    all of them: a rule over a noisy log source is best searched over a day,
+    while a rare detection needs a much longer window to show anything at all.
+    A rule overrides it with the `days_ago` custom field.
+
+    An unusable value is reported and the platform lookback is kept, so a typo
+    in one rule never aborts a run over a whole repository.
+
+    Return: an int with the number of days to look back, or the default given
+    """
+
+    if not rule_content:
+        return default
+
+    days_ago = rule_content.get('custom', {}).get('days_ago')
+
+    if days_ago is None:
+        return default
+
+    if isinstance(days_ago, bool) or not isinstance(days_ago, int) or days_ago < 1:
+        logger.warning(
+            f"Invalid 'days_ago' custom field: expected a positive integer, "
+            f"got {days_ago!r}. Falling back to {default}"
+        )
+        return default
+
+    if maximum and days_ago > maximum:
+        logger.warning(
+            f"The 'days_ago' custom field is {days_ago} but this platform searches "
+            f"over {maximum} days at most. Using {maximum}"
+        )
+        return maximum
+
+    return days_ago
+
+
 def get_pipeline_group_match(rule_content: dict, fields: dict):
     """Retrieve the config group name based on a dict
 

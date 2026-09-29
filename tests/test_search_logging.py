@@ -76,7 +76,7 @@ class FakeXDRPlatform:
     def get_export_list_mssp(self):
         return self._export_list
 
-    def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
+    def run_xdr_search(self, rule_converted, rule_file, tenant_id=None, rule_content=None):
         return self._hits_per_tenant[tenant_id]
 
 
@@ -86,7 +86,7 @@ class FakeSentinelPlatform:
     def __init__(self, total_hits):
         self._total_hits = total_hits
 
-    def run_sentinel_search(self, rule_converted, rule_file, mssp_mode):
+    def run_sentinel_search(self, rule_converted, rule_file, mssp_mode, rule_content=None):
         return self._total_hits
 
     def run_sentinel_search_mssp_designated(self, rule_converted, rule_file, rule_content):
@@ -185,7 +185,7 @@ def test_xdr_mssp_keeps_searching_after_a_tenant_error(logger):
     """A failing tenant is reported but the remaining tenants are still searched"""
 
     class FailingPlatform(FakeXDRPlatform):
-        def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
+        def run_xdr_search(self, rule_converted, rule_file, tenant_id=None, rule_content=None):
             if tenant_id == "tenant-planet-express":
                 raise Exception("Delivery boy is missing")
             return self._hits_per_tenant[tenant_id]
@@ -225,11 +225,12 @@ def test_xdr_single_tenant_warning(logger, hits, expected_warning):
     """Single tenant mode warns with the platform prefix"""
 
     class SingleTenantPlatform:
-        def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
+        def run_xdr_search(self, rule_converted, rule_file, tenant_id=None, rule_content=None):
             return hits
 
     error, search_warning = search_rule_ms_xdr(
         "DeviceNetworkEvents",
+        RULE_CONTENT,
         SingleTenantPlatform(),
         RULE_FILE,
         parameters={},
@@ -246,6 +247,7 @@ def test_sentinel_single_workspace_warning(logger):
     """Sentinel uses the same wording as Microsoft XDR"""
     error, search_warning = search_rule_sentinel(
         "SecurityEvent",
+        RULE_CONTENT,
         FakeSentinelPlatform(total_hits=5),
         RULE_FILE,
         parameters={},

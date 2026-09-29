@@ -8,6 +8,7 @@ import requests
 
 from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
+from droid.platforms.common import get_search_days_ago
 from requests.auth import HTTPBasicAuth
 from sigma.data.mitre_attack import (
     mitre_attack_techniques,
@@ -531,13 +532,13 @@ class ElasticPlatform(AbstractPlatform):
             )
             raise
 
-    def run_eql_search(self, query, es_client=None, index=None):
+    def run_eql_search(self, query, es_client=None, index=None, range_gte=None):
         response = es_client.eql.search(
             index=index,
             query=query,
             wait_for_completion_timeout=0,
             size=100,
-            filter={"range": {"@timestamp": {"gte": self._eql_search_range_gte}}},
+            filter={"range": {"@timestamp": {"gte": range_gte or self._eql_search_range_gte}}},
         )
         search_id = response["id"]
         es_client.eql.get_status(id=search_id)
@@ -553,10 +554,10 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return None
 
-    def run_esql_search(self, query, es_client=None):
+    def run_esql_search(self, query, es_client=None, range_gte=None):
         response = es_client.esql.query(
             query=query,
-            filter={"range": {"@timestamp": {"gte": self._esql_search_range_gte}}},
+            filter={"range": {"@timestamp": {"gte": range_gte or self._esql_search_range_gte}}},
         )
         if "values" in response:
             return len(response["values"])
@@ -576,9 +577,15 @@ class ElasticPlatform(AbstractPlatform):
         if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
         print(language)
+        # A rule lookback is expressed in days, which Elastic takes as date math
+        days_ago = get_search_days_ago(rule_content, None, self.logger)
+        range_gte = f"now-{days_ago}d" if days_ago else None
+
         if language == "esql":
-            return self.run_esql_search(rule_converted, es_client=es_client)
+            return self.run_esql_search(rule_converted, es_client=es_client, range_gte=range_gte)
         elif language == "eql":
-            return self.run_eql_search(rule_converted, es_client=es_client, index=index)
+            return self.run_eql_search(
+                rule_converted, es_client=es_client, index=index, range_gte=range_gte
+            )
         else:
             raise ValueError(f"Unsupported language: {language}")

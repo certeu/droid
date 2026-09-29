@@ -1,0 +1,61 @@
+# This is a TOML document config exercising log source variants
+#
+# windows/process_creation is served by two telemetry sources: Sysmon (primary,
+# keeps the bare rule id and title) and third-party EDR (a named variant).
+
+title = "droid configuration file"
+
+[base]
+
+raw_rules_directory = "rules-raw"
+sigma_validation_config = "tests/files/test_validate.yml"
+
+[platforms]
+
+[platforms.splunk]
+
+url = "splunk23.pizza-planet.local"
+verify_cert = true
+port = "8089"
+test_earliest_time = "-1h@h"
+test_latest_time = "now"
+
+earliest_time = "-1h@h"
+latest_time = "now"
+
+cron_schedule = "0 * * * *"
+
+[platforms.splunk.pipelines.windows_process_creation]
+
+pipelines = ["tests/files/pipelines/splunk_process_creation.yml", "splunk_windows"]
+product = "windows"
+category = "process_creation"
+variant = "sysmon"
+primary = true
+
+[platforms.splunk.pipelines.windows_process_creation_edr]
+
+pipelines = ["tests/files/pipelines/splunk_process_creation_edr.yml", "splunk_windows"]
+product = "windows"
+category = "process_creation"
+variant = "edr"
+# third-party EDR field names differ from Sysmon's, so the variant suppresses on its
+# own fields rather than inheriting the log-source-wide ones below.
+"alert.suppress.fields" = "aid,process_path"
+
+[platforms.splunk.savedsearch_parameters]
+
+alert_type = "number of events"
+app = "search"
+sharing = "app"
+alert_comparator = "greater than"
+alert_threshold = 0
+"alert.track" = 1
+allow_skew = "67%"
+"alert.suppress" = 1
+"alert.digest_mode" = 0
+
+[platforms.splunk.savedsearch_parameters.suppress_fields_groups.windows_process_creation]
+product = "windows"
+category = "process_creation"
+"alert.suppress.fields" = "Computer,CommandLine"
