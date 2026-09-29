@@ -7,6 +7,8 @@ filter:
     rules:
         - 93199800-b52a-4dec-b762-75212c196556
     selection:
-        ComputerName|startswith: "DC-"
+        # The XDR pipeline maps no Sigma host field onto DeviceProcessEvents, so
+        # the exclusion names the table column it validates against directly.
+        DeviceName|startswith: "DC-"
     condition: not selection
 customer_name: "Zoidberg"

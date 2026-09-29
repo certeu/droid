@@ -50,6 +50,9 @@ def test_convert_valid_file_with_customer_filter():
     result = runner.invoke(app, ["rules", "convert", "--platform", "microsoft_xdr", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config.toml", "--mssp"])
     assert result.exit_code == 0
 
+    # An exit code of 0 alone would also be had from a filter that never applied
+    assert 'not(DeviceName startswith "DC-")' in result.stdout
+
 def test_convert_emits_one_query_per_variant():
     """A log source served by two telemetry sources converts to two queries.
 
@@ -395,9 +398,14 @@ def test_convert_mssp_shows_each_customer_only_their_variants():
     zoidberg = result.stdout.split("Zoidberg", 1)[1].split("Slurm", 1)[0]
     slurm = result.stdout.split("Slurm", 1)[1]
 
-    # Zoidberg carries both telemetry sources
+    # A failed conversion names the table in its error, so the counts below would
+    # be just as happy with two errors as with two queries
+    assert "Conversion failed" not in result.stdout
+
+    # Zoidberg carries both telemetry sources, both filtered
     assert "thirdparty_edr" in zoidberg
     assert zoidberg.count("DeviceProcessEvents") == 2
+    assert zoidberg.count('not(DeviceName startswith "DC-")') == 2
 
     # Slurm carries only the third-party EDR and must never see the native query
     assert "thirdparty_edr" in slurm
