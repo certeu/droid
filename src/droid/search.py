@@ -28,9 +28,9 @@ def load_rule(rule_file):
         print("Error reading {0}".format(rule_file))
         return True
 
-def search_rule_splunk(rule_converted, platform: SplunkPlatform, rule_file, parameters, logger, error, search_warning):
+def search_rule_splunk(rule_converted, rule_content, platform: SplunkPlatform, rule_file, parameters, logger, error, search_warning):
     try:
-        result: dict = platform.run_splunk_search(rule_converted, rule_file)
+        result: dict = platform.run_splunk_search(rule_converted, rule_file, rule_content=rule_content)
         logger.info(f"Successfully searched the rule {rule_file}")
 
         if result["resultCount"] > 0: # If the rule has match
@@ -68,10 +68,10 @@ def search_rule_sentinel_mssp(rule_converted, rule_content, platform: SentinelPl
         error = True
         return error, search_warning
 
-def search_rule_sentinel(rule_converted, platform: SentinelPlatform, rule_file, parameters, logger, error, search_warning, mssp_mode):
+def search_rule_sentinel(rule_converted, rule_content, platform: SentinelPlatform, rule_file, parameters, logger, error, search_warning, mssp_mode):
 
     try:
-        result: int = platform.run_sentinel_search(rule_converted, rule_file, mssp_mode)
+        result: int = platform.run_sentinel_search(rule_converted, rule_file, mssp_mode, rule_content=rule_content)
 
         logger.info(f"Successfully searched the rule {rule_file}")
 
@@ -122,7 +122,7 @@ def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDR
                 logger.warning(f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion.")
 
         try:
-            result: int = platform.run_xdr_search(customer_rule_converted, rule_file, tenant_id=tenant_id)
+            result: int = platform.run_xdr_search(customer_rule_converted, rule_file, tenant_id=tenant_id, rule_content=rule_content)
 
             logger.info(f"Successfully searched the rule {rule_file}")
 
@@ -143,10 +143,10 @@ def search_rule_ms_xdr_mssp(rule_converted, rule_content, platform: MicrosoftXDR
 
     return error, search_warning
 
-def search_rule_ms_xdr(rule_converted, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
+def search_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPlatform, rule_file, parameters, logger, error, search_warning):
 
     try:
-        result: int = platform.run_xdr_search(rule_converted, rule_file)
+        result: int = platform.run_xdr_search(rule_converted, rule_file, rule_content=rule_content)
 
         logger.info(f"Successfully searched the rule {rule_file}")
 
@@ -195,7 +195,7 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
         return error, search_warning
 
     if parameters.platform == "splunk":
-        error, search_warning = search_rule_splunk(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
+        error, search_warning = search_rule_splunk(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
         return error, search_warning
     elif parameters.platform in ["esql", "eql"]:
         error, search_warning = search_rule_elastic(rule_converted, platform, rule_file,
@@ -207,14 +207,14 @@ def search_rule(parameters, rule_content, rule_converted, platform, rule_file, e
             error, search_warning = search_rule_sentinel_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
             return error, search_warning
         else:
-            error, search_warning = search_rule_sentinel(rule_converted, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=False)
+            error, search_warning = search_rule_sentinel(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning, mssp_mode=False)
             return error, search_warning
     elif parameters.platform == "microsoft_xdr":
         if parameters.mssp:
             error, search_warning = search_rule_ms_xdr_mssp(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
             return error, search_warning
         else:
-            error, search_warning = search_rule_ms_xdr(rule_converted, platform, rule_file, parameters, logger, error, search_warning)
+            error, search_warning = search_rule_ms_xdr(rule_converted, rule_content, platform, rule_file, parameters, logger, error, search_warning)
             return error, search_warning
 
 def search_rule_raw(parameters: dict, export_config: dict, logger_param: dict):

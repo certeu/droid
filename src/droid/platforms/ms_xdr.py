@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-from droid.platforms.common import get_error_message, get_pipeline_group_match, get_token_hook_headers
+from droid.platforms.common import get_error_message, get_pipeline_group_match, get_search_days_ago, get_token_hook_headers
 from droid.variants import customer_serves_variant
 from msal import ConfidentialClientApplication
 from azure.identity import DefaultAzureCredential
@@ -118,8 +118,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.error("No export_list_mssp found")
             raise
 
-    def run_xdr_search(self, rule_converted, rule_file, tenant_id=None):
-        payload = {"Query": rule_converted, "Timespan": f"P{self._search_daysago}D"}
+    def run_xdr_search(self, rule_converted, rule_file, tenant_id=None, rule_content=None):
+        days_ago = get_search_days_ago(rule_content, self._search_daysago, self.logger, maximum=30)
+        payload = {"Query": rule_converted, "Timespan": f"P{days_ago}D"}
         try:
             if tenant_id:
                 self.logger.info(

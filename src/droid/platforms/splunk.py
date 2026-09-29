@@ -7,7 +7,7 @@ from os import environ
 from time import sleep
 from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
-from droid.platforms.common import get_suppress_fields
+from droid.platforms.common import get_search_days_ago, get_suppress_fields
 from splunklib.binding import AuthenticationError
 
 class SplunkPlatform(AbstractPlatform):
@@ -53,7 +53,7 @@ class SplunkPlatform(AbstractPlatform):
 
         self._suppress_fields_groups = self._parameters['savedsearch_parameters'].get('suppress_fields_groups', {})
 
-    def run_splunk_search(self, rule_converted, rule_file) -> list:
+    def run_splunk_search(self, rule_converted, rule_file, rule_content=None) -> list:
         """
         :param access_token: JWT token to execute the request on the backend
         :return: List containing the Splunk result
@@ -76,9 +76,15 @@ class SplunkPlatform(AbstractPlatform):
         else:
             rule_converted = f'search {rule_converted}'
 
+        # A rule lookback is expressed in days, which Splunk takes as a relative
+        # time modifier. Unsnapped, so it covers the same rolling window as the
+        # other platforms rather than whole days.
+        days_ago = get_search_days_ago(rule_content, None, self.logger)
+        earliest_time = f"-{days_ago}d" if days_ago else self._test_earliest_time
+
         job = service.jobs.create(
             rule_converted,
-            earliest_time=self._test_earliest_time,
+            earliest_time=earliest_time,
             latest_time=self._test_latest_time,
             exec_mode="normal"
         )

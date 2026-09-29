@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-from droid.platforms.common import get_token_hook_headers
+from droid.platforms.common import get_search_days_ago, get_token_hook_headers
 from droid.variants import customer_serves_variant
 
 class CustomTokenCredential:
@@ -362,7 +362,8 @@ class SentinelPlatform(AbstractPlatform):
         Run search for designated customers using export_list_mssp with customer-specific filters.
         """
         current_time = datetime.now(timezone.utc)
-        start_time = current_time - timedelta(days=self._days_ago)
+        days_ago = get_search_days_ago(rule_content, self._days_ago, self.logger)
+        start_time = current_time - timedelta(days=days_ago)
         total_result = 0
         
         if not self._export_list_mssp:
@@ -422,10 +423,11 @@ class SentinelPlatform(AbstractPlatform):
         
         return total_result
 
-    def run_sentinel_search(self, rule_converted, rule_file, mssp_mode):
+    def run_sentinel_search(self, rule_converted, rule_file, mssp_mode, rule_content=None):
 
         current_time = datetime.now(timezone.utc)
-        start_time = current_time - timedelta(days=self._days_ago)
+        days_ago = get_search_days_ago(rule_content, self._days_ago, self.logger)
+        start_time = current_time - timedelta(days=days_ago)
 
         try:
             if mssp_mode:

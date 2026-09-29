@@ -79,6 +79,45 @@ def get_suppress_fields(rule_content: dict, suppress_fields_groups: dict):
     return None
 
 
+def get_search_days_ago(rule_content: dict, default, logger, maximum: int = None):
+    """Resolve the lookback of a search, in days
+
+    The platform parameters set one lookback for every rule, which rarely suits
+    all of them: a rule over a noisy log source is best searched over a day,
+    while a rare detection needs a much longer window to show anything at all.
+    A rule overrides it with the `days_ago` custom field.
+
+    An unusable value is reported and the platform lookback is kept, so a typo
+    in one rule never aborts a run over a whole repository.
+
+    Return: an int with the number of days to look back, or the default given
+    """
+
+    if not rule_content:
+        return default
+
+    days_ago = rule_content.get('custom', {}).get('days_ago')
+
+    if days_ago is None:
+        return default
+
+    if isinstance(days_ago, bool) or not isinstance(days_ago, int) or days_ago < 1:
+        logger.warning(
+            f"Invalid 'days_ago' custom field: expected a positive integer, "
+            f"got {days_ago!r}. Falling back to {default}"
+        )
+        return default
+
+    if maximum and days_ago > maximum:
+        logger.warning(
+            f"The 'days_ago' custom field is {days_ago} but this platform searches "
+            f"over {maximum} days at most. Using {maximum}"
+        )
+        return maximum
+
+    return days_ago
+
+
 def get_pipeline_group_match(rule_content: dict, fields: dict):
     """Retrieve the config group name based on a dict
 
