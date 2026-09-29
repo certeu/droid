@@ -26,6 +26,13 @@ from typing import Optional, Callable
 # hours, so anything above this is a malformed header rather than a real wait.
 MAX_RETRY_AFTER_SECONDS = 3600
 
+# Graph times a single hunting query out after three minutes, and a heavy tenant
+# really does take that long. The client waits slightly past the server limit so
+# the timeout comes back as an error explaining itself, rather than as an aborted
+# connection the retry loop then runs four more times.
+# https://learn.microsoft.com/en-us/graph/api/resources/security-api-overview
+HUNTING_QUERY_TIMEOUT = 190
+
 # Total time a single request may spend waiting on throttling before giving up.
 # Tenant quota windows run to ~35 minutes, so the budget has to clear one of them
 # for a run to survive it. Overridable with the "max_throttle_wait" parameter.
@@ -132,7 +139,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
 
             results, status_code = self._post(
-                url="/security/runHuntingQuery", payload=payload, tenant_id=tenant_id
+                url="/security/runHuntingQuery",
+                payload=payload,
+                tenant_id=tenant_id,
+                timeout=HUNTING_QUERY_TIMEOUT,
             )
             time.sleep(2)
             if "error" in results:

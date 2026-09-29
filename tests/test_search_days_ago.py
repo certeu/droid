@@ -53,7 +53,7 @@ def _xdr_platform_recording_payloads():
     platform = MicrosoftXDRPlatform(XDR_PARAMETERS, LOGGER_PARAM)
     payloads = []
 
-    def fake_post(url, payload=None, tenant_id=None):
+    def fake_post(url, payload=None, tenant_id=None, timeout=None):
         payloads.append(payload)
         return {"results": []}, 200
 
