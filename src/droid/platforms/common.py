@@ -60,8 +60,8 @@ def get_suppress_fields(rule_content: dict, suppress_fields_groups: dict):
 
     Suppression fields are named per log source, but a log source can be served
     by several telemetry sources whose schemas differ — suppressing a Sysmon
-    rule on `Computer` says nothing about the same detection over BitDefender
-    data. A variant pipeline group may therefore declare its own
+    rule on `Computer` says nothing about the same detection over third-party
+    EDR data. A variant pipeline group may therefore declare its own
     `alert.suppress.fields`, which takes precedence over the log-source-wide
     ones. A variant that shares the primary's schema simply inherits them.
 

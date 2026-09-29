@@ -25,12 +25,12 @@ def test_non_primary_variant_derives_a_distinct_stable_uuid():
 
     from droid.variants import derive_rule_id
 
-    derived = derive_rule_id(SIGMA_ID, "bitdefender")
+    derived = derive_rule_id(SIGMA_ID, "edr")
 
     assert derived != SIGMA_ID
     uuid.UUID(derived)  # must be a well-formed UUID for the Sentinel API
     # Deterministic: the same inputs always produce the same id, across runs.
-    assert derived == derive_rule_id(SIGMA_ID, "bitdefender")
+    assert derived == derive_rule_id(SIGMA_ID, "edr")
 
 
 def test_different_variants_of_the_same_rule_do_not_collide():
@@ -59,8 +59,8 @@ def test_non_primary_variant_suffixes_the_title():
     """A named variant gets a suffixed, human-readable saved-search name."""
     from droid.variants import derive_title
 
-    assert derive_title("Suspicious Process Creation", "bitdefender") == (
-        "Suspicious Process Creation [bitdefender]"
+    assert derive_title("Suspicious Process Creation", "edr") == (
+        "Suspicious Process Creation [edr]"
     )
 
 
@@ -75,11 +75,11 @@ SYSMON_GROUP = {
     "product": "windows",
     "category": "process_creation",
 }
-BITDEFENDER_GROUP = {
-    "pipelines": ["splunk_bitdefender"],
+EDR_GROUP = {
+    "pipelines": ["splunk_edr"],
     "product": "windows",
     "category": "process_creation",
-    "variant": "bitdefender",
+    "variant": "edr",
 }
 
 
@@ -119,15 +119,15 @@ def test_two_matching_groups_both_resolve_with_the_primary_first():
         PROCESS_CREATION,
         {
             "windows_process_creation": {**SYSMON_GROUP, "variant": "sysmon", "primary": True},
-            "windows_process_creation_bitdefender": BITDEFENDER_GROUP,
+            "windows_process_creation_edr": EDR_GROUP,
         },
     )
 
-    assert [v.name for v in resolved] == ["sysmon", "bitdefender"]
+    assert [v.name for v in resolved] == ["sysmon", "edr"]
     assert [v.is_primary for v in resolved] == [True, False]
     # Only the non-primary derives an identity.
     assert resolved[0].identity_key is None
-    assert resolved[1].identity_key == "bitdefender"
+    assert resolved[1].identity_key == "edr"
 
 
 def test_two_matching_groups_without_a_primary_is_a_config_error():
@@ -139,7 +139,7 @@ def test_two_matching_groups_without_a_primary_is_a_config_error():
             PROCESS_CREATION,
             {
                 "windows_process_creation": {**SYSMON_GROUP, "variant": "sysmon"},
-                "windows_process_creation_bitdefender": BITDEFENDER_GROUP,
+                "windows_process_creation_edr": EDR_GROUP,
             },
         )
 
@@ -167,7 +167,7 @@ def test_two_matching_groups_declaring_two_primaries_is_a_config_error():
             PROCESS_CREATION,
             {
                 "group_a": {**SYSMON_GROUP, "variant": "sysmon", "primary": True},
-                "group_b": {**BITDEFENDER_GROUP, "primary": True},
+                "group_b": {**EDR_GROUP, "primary": True},
             },
         )
 
@@ -181,7 +181,7 @@ def test_unnamed_group_alongside_a_variant_is_a_config_error():
             PROCESS_CREATION,
             {
                 "windows_process_creation": SYSMON_GROUP,  # no variant, no primary
-                "windows_process_creation_bitdefender": BITDEFENDER_GROUP,
+                "windows_process_creation_edr": EDR_GROUP,
             },
         )
 
@@ -197,7 +197,7 @@ def _two_variants():
         PROCESS_CREATION,
         {
             "windows_process_creation": {**SYSMON_GROUP, "variant": "sysmon", "primary": True},
-            "windows_process_creation_bitdefender": BITDEFENDER_GROUP,
+            "windows_process_creation_edr": EDR_GROUP,
         },
     )
 
@@ -206,24 +206,24 @@ def test_no_allowlist_selects_every_variant():
     """Default is to deploy everything the platform config declares."""
     from droid.variants import select_variants
 
-    assert [v.name for v in select_variants(_two_variants(), None)] == ["sysmon", "bitdefender"]
+    assert [v.name for v in select_variants(_two_variants(), None)] == ["sysmon", "edr"]
 
 
 def test_allowlist_narrows_to_the_named_variants():
     """A customer entry lists the telemetry that customer actually has."""
     from droid.variants import select_variants
 
-    assert [v.name for v in select_variants(_two_variants(), ["bitdefender"])] == ["bitdefender"]
+    assert [v.name for v in select_variants(_two_variants(), ["edr"])] == ["edr"]
 
 
 def test_allowlist_can_drop_the_primary():
     """A customer with only AGWAccessLogs and no WAF must be expressible."""
     from droid.variants import select_variants
 
-    selected = select_variants(_two_variants(), ["bitdefender"])
+    selected = select_variants(_two_variants(), ["edr"])
 
     assert [v.is_primary for v in selected] == [False]
-    assert selected[0].identity_key == "bitdefender"
+    assert selected[0].identity_key == "edr"
 
 
 def test_allowlist_does_not_narrow_a_log_source_that_names_no_variants():
@@ -239,7 +239,7 @@ def test_allowlist_does_not_narrow_a_log_source_that_names_no_variants():
 
     variants = resolve_variants(PROCESS_CREATION, {"windows_process_creation": SYSMON_GROUP})
 
-    assert [v.name for v in select_variants(variants, ["bitdefender"])] == ["default"]
+    assert [v.name for v in select_variants(variants, ["edr"])] == ["default"]
 
 
 def test_allowlist_narrows_a_sole_variant_that_is_named():
@@ -251,7 +251,7 @@ def test_allowlist_narrows_a_sole_variant_that_is_named():
         PROCESS_CREATION, {"windows_process_creation": {**SYSMON_GROUP, "variant": "sysmon"}}
     )
 
-    assert select_variants(variants, ["bitdefender"]) == []
+    assert select_variants(variants, ["edr"]) == []
     assert [v.name for v in select_variants(variants, ["sysmon"])] == ["sysmon"]
 
 
@@ -283,11 +283,11 @@ def test_variant_rule_content_carries_the_derived_identity():
     """Platforms read id and title straight off rule_content, so substitute there."""
     from droid.variants import derive_rule_id, variant_rule_content
 
-    bitdefender = _two_variants()[1]
-    content = variant_rule_content(_rule_content(), bitdefender)
+    edr = _two_variants()[1]
+    content = variant_rule_content(_rule_content(), edr)
 
-    assert content["id"] == derive_rule_id(SIGMA_ID, "bitdefender")
-    assert content["title"] == "Suspicious Process Creation [bitdefender]"
+    assert content["id"] == derive_rule_id(SIGMA_ID, "edr")
+    assert content["title"] == "Suspicious Process Creation [edr]"
 
 
 def test_variant_rule_content_records_its_parent():
@@ -296,7 +296,7 @@ def test_variant_rule_content_records_its_parent():
 
     content = variant_rule_content(_rule_content(), _two_variants()[1])
 
-    assert content["_droid_variant"]["name"] == "bitdefender"
+    assert content["_droid_variant"]["name"] == "edr"
     assert content["_droid_variant"]["parent_id"] == SIGMA_ID
     assert content["_droid_variant"]["parent_title"] == "Suspicious Process Creation"
     assert content["_droid_variant"]["is_primary"] is False
@@ -342,7 +342,7 @@ def test_variant_rule_content_isolates_the_nested_rule_fields():
         "logsource": {"category": "process_creation", "product": "windows"},
     }
 
-    content = variant_rule_content(rule_content, Variant("bitdefender", "g", {}, False))
+    content = variant_rule_content(rule_content, Variant("edr", "g", {}, False))
 
     content["custom"]["disabled"] = False
     content["detection"]["selection"]["CommandLine|contains"] = "bar.exe"
@@ -365,16 +365,16 @@ def test_customer_without_an_allowlist_serves_every_variant():
     """Configurations predating variants must keep receiving every rule."""
     from droid.variants import customer_serves_variant
 
-    assert customer_serves_variant(_variant_content("bitdefender"), {"workspace_name": "ws"}) is True
+    assert customer_serves_variant(_variant_content("edr"), {"workspace_name": "ws"}) is True
 
 
 def test_customer_serves_only_the_variants_they_declare():
-    """A customer only carrying BitDefender data must never be sent the Sysmon query."""
+    """A customer only carrying third-party EDR data must never be sent the Sysmon query."""
     from droid.variants import customer_serves_variant
 
-    customer = {"variants": ["bitdefender"]}
+    customer = {"variants": ["edr"]}
 
-    assert customer_serves_variant(_variant_content("bitdefender"), customer) is True
+    assert customer_serves_variant(_variant_content("edr"), customer) is True
     assert customer_serves_variant(_variant_content("sysmon", is_primary=True), customer) is False
 
 
@@ -384,4 +384,4 @@ def test_customer_with_an_allowlist_still_serves_a_rule_carrying_no_variant():
     from droid.variants import customer_serves_variant
 
     assert customer_serves_variant({"id": SIGMA_ID, "title": "t", **PROCESS_CREATION},
-                                   {"variants": ["bitdefender"]}) is True
+                                   {"variants": ["edr"]}) is True

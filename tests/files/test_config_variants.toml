@@ -1,7 +1,7 @@
 # This is a TOML document config exercising log source variants
 #
 # windows/process_creation is served by two telemetry sources: Sysmon (primary,
-# keeps the bare rule id and title) and BitDefender (a named variant).
+# keeps the bare rule id and title) and third-party EDR (a named variant).
 
 title = "droid configuration file"
 
@@ -33,13 +33,13 @@ category = "process_creation"
 variant = "sysmon"
 primary = true
 
-[platforms.splunk.pipelines.windows_process_creation_bitdefender]
+[platforms.splunk.pipelines.windows_process_creation_edr]
 
-pipelines = ["tests/files/pipelines/splunk_process_creation_bitdefender.yml", "splunk_windows"]
+pipelines = ["tests/files/pipelines/splunk_process_creation_edr.yml", "splunk_windows"]
 product = "windows"
 category = "process_creation"
-variant = "bitdefender"
-# BitDefender field names differ from Sysmon's, so the variant suppresses on its
+variant = "edr"
+# third-party EDR field names differ from Sysmon's, so the variant suppresses on its
 # own fields rather than inheriting the log-source-wide ones below.
 "alert.suppress.fields" = "aid,process_path"
 

@@ -45,8 +45,8 @@ class Conversion:
         """Resolve the telemetry variants serving a rule's log source
 
         A log source can be served by more than one pipeline group — Sysmon and
-        BitDefender for windows/process_creation — and each produces its own
-        query deployed as its own object.
+        a third-party EDR for windows/process_creation — and each produces its
+        own query deployed as its own object.
 
         Args:
             rule_content: The parsed rule content dictionary

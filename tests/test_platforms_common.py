@@ -88,15 +88,15 @@ def test_suppress_fields_are_none_when_no_group_matches():
 
 
 def test_variant_overrides_the_log_source_suppress_fields():
-    """BitDefender field names differ from Sysmon's, so the log-source-wide
+    """third-party EDR field names differ from Sysmon's, so the log-source-wide
     suppression fields do not exist in the variant's data and must not be used."""
     from droid.platforms.common import get_suppress_fields
 
     rule_content = {
         **PROCESS_CREATION_RULE,
         "_droid_variant": {
-            "name": "bitdefender",
-            "config": {"variant": "bitdefender", "alert.suppress.fields": "aid,process_path"},
+            "name": "edr",
+            "config": {"variant": "edr", "alert.suppress.fields": "aid,process_path"},
         },
     }
 

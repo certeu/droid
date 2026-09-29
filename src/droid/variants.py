@@ -1,8 +1,8 @@
 """
 Module handling the log source variants
 
-A log source can be served by more than one telemetry source: Sysmon *and*
-BitDefender for windows/process_creation, Azure WAF *and* AGWAccessLogs for
+A log source can be served by more than one telemetry source: Sysmon *and* a
+third-party EDR for windows/process_creation, Azure WAF *and* AGWAccessLogs for
 webserver. Each of those is a *variant*: its own pipeline group, producing its
 own query, deployed as its own object on the platform.
 
@@ -31,7 +31,7 @@ class Variant:
     """One telemetry source serving a log source
 
     Attributes:
-        name: the variant name declared in the config, e.g. "bitdefender"
+        name: the variant name declared in the config, e.g. "edr"
         group: the pipeline config group it comes from
         config: the pipeline group parameters
         is_primary: whether it keeps the bare Sigma id and title

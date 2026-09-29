@@ -54,19 +54,19 @@ def test_convert_emits_one_query_per_variant():
     """A log source served by two telemetry sources converts to two queries.
 
     Without the fan-out, get_pipeline_config_group breaks on the first matching
-    group and the BitDefender query is never produced at all.
+    group and the third-party EDR query is never produced at all.
     """
     result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config_variants.toml"])
     assert result.exit_code == 0
     assert 'index="windows_sysmon"' in result.stdout
-    assert 'index="bitdefender_events"' in result.stdout
+    assert 'index="edr_events"' in result.stdout
 
 def test_convert_single_group_config_still_emits_one_query():
     """Configs predating variants must be untouched by the fan-out."""
     result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", "tests/files/test_config_custom_pipelines.toml"])
     assert result.exit_code == 0
     assert result.stdout.count('index="windows_sysmon"') == 1
-    assert 'index="bitdefender_events"' not in result.stdout
+    assert 'index="edr_events"' not in result.stdout
 
 def test_file_has_correlation_detects_in_multidoc():
     """_file_has_correlation must scan every YAML document, not only the first."""
@@ -406,11 +406,11 @@ def test_convert_mssp_shows_each_customer_only_their_variants():
 def test_convert_honours_the_platform_wide_variant_allowlist(tmp_path):
     """A deployment carrying only one of the declared sources converts only that one."""
     config = Path("tests/files/test_config_variants.toml").read_text()
-    config = config.replace('[platforms.splunk]\n', '[platforms.splunk]\n\nvariants = ["bitdefender"]\n')
+    config = config.replace('[platforms.splunk]\n', '[platforms.splunk]\n\nvariants = ["edr"]\n')
     narrowed = tmp_path / "narrowed.toml"
     narrowed.write_text(config)
 
     result = runner.invoke(app, ["rules", "convert", "--platform", "splunk", "--rules", "tests/files/sigma-rules/valid/convert_valid_rule.yml", "--config-file", str(narrowed)])
     assert result.exit_code == 0
-    assert 'index="bitdefender_events"' in result.stdout
+    assert 'index="edr_events"' in result.stdout
     assert 'index="windows_sysmon"' not in result.stdout
