@@ -474,6 +474,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 alert_rule["detectionAction"]["alertTemplate"][
                     "impactedAssets"
                 ] = impactedAssets
+            if "entity_mappings" in rule_content["custom"]:
+                entityMappings = self.parse_entity_mappings(
+                    rule_content["custom"]["entity_mappings"], rule_file=rule_file
+                )
+                alert_rule["detectionAction"]["alertTemplate"][
+                    "entityMappings"
+                ] = entityMappings
 
         if self._export_mssp:
             if self._export_list_mssp:
@@ -607,6 +614,22 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 != new_rule["detectionAction"]["responseActions"]
             ):
                 change = True
+            # entityMappings is only part of the payload when the rule defines
+            # custom.entity_mappings; otherwise the service auto-derives it and
+            # a comparison would flag every rule as changed. The service fills
+            # every category and column, unset ones as empty strings, so both
+            # sides are reduced to their non-empty (category, column, value)
+            # triples before comparing.
+            new_mappings = new_rule["detectionAction"]["alertTemplate"].get(
+                "entityMappings"
+            )
+            if new_mappings is not None:
+                if self._entity_mapping_triples(
+                    existing_rule["detectionAction"]["alertTemplate"].get(
+                        "entityMappings"
+                    )
+                ) != self._entity_mapping_triples(new_mappings):
+                    change = True
         except Exception as e:
             self.logger.error(f"Error while checking rule changes {e}")
             return True
@@ -852,6 +875,89 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     )
                     raise
         return impactedAssetsList
+
+    # Valid column identifiers per entity category, from the Graph beta
+    # entityMappingConfiguration complex type.
+    ENTITY_MAPPING_COLUMNS = {
+        "accounts": "aadUserIdColumn dnsDomainColumn nameColumn ntDomainColumn sidColumn upnColumn upnSuffixColumn",
+        "amazonResources": "amazonResourceIdColumn",
+        "azureResources": "resourceIdColumn",
+        "cloudApplications": "appIdColumn nameColumn",
+        "dns": "domainNameColumn hostIpAddressColumn serverIpColumn",
+        "files": "nameColumn sha1Column sha256Column",
+        "googleCloudResources": "fullResourceNameColumn",
+        "hosts": "deviceIdColumn dnsDomainColumn nameColumn netBiosNameColumn ntDomainColumn",
+        "ips": "addressColumn scopeColumn",
+        "mailboxes": "primaryAddressColumn",
+        "mailClusters": "queryColumn sourceColumn",
+        "mailMessages": "networkMessageIdColumn recipientColumn senderColumn subjectColumn",
+        "oAuthApplications": "oAuthAppIdColumn",
+        "processes": "sha1Column sha256Column",
+        "registryValues": "keyColumn valueNameColumn",
+        "securityGroups": "distinguishedNameColumn objectIdColumn sidColumn",
+        "urls": "addressColumn",
+    }
+
+    def _entity_mapping_error(self, message, rule_file):
+        message = f"{message} - {rule_file}"
+        self.logger.error(message)
+        return ValueError(message)
+
+    def parse_entity_mappings(self, entity_mappings, rule_file=None):
+        """Build the alertTemplate entityMappings payload from custom.entity_mappings.
+
+        The YAML mirrors the Sentinel custom.entity_mappings shape: a list of
+        entries, each with an entity_type and field_mappings of
+        identifier/column_name pairs. Every entry becomes one mapping object in
+        the matching category of the Graph beta entityMappingConfiguration.
+        """
+        entityMappingConfiguration = {}
+        for mapping in entity_mappings:
+            entity_type = mapping.get("entity_type")
+            if entity_type not in self.ENTITY_MAPPING_COLUMNS:
+                raise self._entity_mapping_error(
+                    f"Entity mappings need 'entity_type' one of {sorted(self.ENTITY_MAPPING_COLUMNS)}",
+                    rule_file,
+                )
+            mapping_entry = {}
+            for field in mapping.get("field_mappings") or []:
+                identifier = field.get("identifier")
+                column_name = field.get("column_name")
+                if not identifier or not column_name:
+                    raise self._entity_mapping_error(
+                        "Entity mapping field_mappings need 'identifier' and 'column_name'",
+                        rule_file,
+                    )
+                if identifier not in self.ENTITY_MAPPING_COLUMNS[entity_type].split():
+                    raise self._entity_mapping_error(
+                        f"Identifier for {entity_type} must be one of {self.ENTITY_MAPPING_COLUMNS[entity_type].split()}",
+                        rule_file,
+                    )
+                mapping_entry[identifier] = column_name
+            if not mapping_entry:
+                raise self._entity_mapping_error(
+                    "Entity mappings need non-empty 'field_mappings'", rule_file
+                )
+            entityMappingConfiguration.setdefault(entity_type, []).append(
+                mapping_entry
+            )
+        return entityMappingConfiguration
+
+    @staticmethod
+    def _entity_mapping_triples(entity_mappings):
+        # Reduce an entityMappingConfiguration to its non-empty
+        # (category, column, value) triples, so a payload that only lists the
+        # mapped columns compares equal to the service response that fills
+        # every category and column with empty strings.
+        triples = set()
+        if not entity_mappings:
+            return triples
+        for category, entries in entity_mappings.items():
+            for entry in entries:
+                for column, value in entry.items():
+                    if value:
+                        triples.add((category, column, value))
+        return triples
 
     def _acquire_token_from_hook(self, hook_url, tenant_id=None, max_retries=5, retry_delay=10):
         if not tenant_id:
