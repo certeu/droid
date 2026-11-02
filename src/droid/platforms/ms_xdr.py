@@ -430,12 +430,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "category": category,
                         "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                         "mitreTechniques": mitreTechniques,
-                        "impactedAssets": [  # This is default, it can be overwritten by the custom rule fields
-                            {
-                                "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
-                                "identifier": "deviceId",
-                            },
-                        ],
                     },
                     "organizationalScope": None,  # TODO: Find out what this does
                     "responseActions": [],  # TODO: Define Actions in custom rule fields
@@ -468,12 +462,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 alert_rule["detectionAction"]["responseActions"] = responseActions
             if "impactedAssets" in rule_content["custom"]:
-                impactedAssets = self.parse_impactedAssets(
-                    rule_content["custom"]["impactedAssets"], rule_file=rule_file
+                self.logger.warning(
+                    f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.entity_mappings - {rule_file}"
                 )
-                alert_rule["detectionAction"]["alertTemplate"][
-                    "impactedAssets"
-                ] = impactedAssets
             if "entity_mappings" in rule_content["custom"]:
                 entityMappings = self.parse_entity_mappings(
                     rule_content["custom"]["entity_mappings"], rule_file=rule_file
@@ -590,7 +581,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 "category",
                 "recommendedActions",
                 "mitreTechniques",
-                "impactedAssets",
             ]
 
             for field in global_fields:
@@ -824,57 +814,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
             response_actions.append(response_action)
         return response_actions
-
-    def parse_impactedAssets(self, impactedAssets, rule_file=None):
-        impactedAssetsList = []
-        for asset in impactedAssets:
-            if "impactedAssetType" in asset and "identifier" in asset:
-                impactedAssetType = asset["impactedAssetType"].capitalize()
-                identifier = asset["identifier"]
-                # Define a mapping of action names to valid identifiers
-                valid_identifiers = {
-                    "Device": ["deviceId", "deviceName"],
-                    "Mailbox": ["accountUpn", "initiatingProcessAccountUpn"],
-                    "User": [
-                        "accountObjectId",
-                        "accountSid",
-                        "accountUpn",
-                        "accountName",
-                        "accountDomain",
-                        "accountId",
-                        "requestAccountSid",
-                        "requestAccountName",
-                        "requestAccountDomain",
-                        "recipientObjectId",
-                        "processAccountObjectId",
-                        "initiatingAccountSid",
-                        "initiatingProcessAccountUpn",
-                        "initiatingAccountName",
-                        "initiatingAccountDomain",
-                        "servicePrincipalId",
-                        "servicePrincipalName",
-                        "targetAccountUpn",
-                    ],
-                }
-                # Check if the action_name is in the valid_identifiers dictionary
-                if impactedAssetType in valid_identifiers:
-                    if identifier not in valid_identifiers[impactedAssetType]:
-                        self.logger.error(
-                            f"Identifier for {impactedAssetType} must be one of {valid_identifiers[impactedAssetType]} - {rule_file}"
-                        )
-                        raise
-                    else:
-                        impactedAsset = {
-                            "@odata.type": f"#microsoft.graph.security.impacted{impactedAssetType}Asset",
-                            "identifier": identifier,
-                        }
-                        impactedAssetsList.append(impactedAsset)
-                else:
-                    self.logger.error(
-                        f"Impacted Asset Type {impactedAssetType} is not valid - {rule_file}"
-                    )
-                    raise
-        return impactedAssetsList
 
     # Valid column identifiers per entity category, from the Graph beta
     # entityMappingConfiguration complex type.
