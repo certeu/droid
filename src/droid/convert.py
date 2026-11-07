@@ -9,6 +9,7 @@ from typing import Optional
 from rich import print
 from sigma.plugins import InstalledSigmaPlugins
 from sigma.conversion.base import Backend, SigmaCollection
+from sigma.correlations import SigmaCorrelationRule
 from sigma.exceptions import SigmaTransformationError
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.exceptions import SigmaConversionError
@@ -284,7 +285,16 @@ class Conversion:
             self.logger.debug(f"Applying default filters from {self._filters_directory}")
 
         sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
-        rule_converted = backend.convert(sigma_rule, self._format)[0]
+        queries = backend.convert(sigma_rule, self._format)
+        rule_converted = queries[0]
+        if is_correlation_rule:
+            # The backend emits every rule the correlation does not reference
+            # ahead of it: deploy the correlation's own query
+            correlation = next(
+                (rule for rule in sigma_rule.rules if isinstance(rule, SigmaCorrelationRule)), None
+            )
+            if correlation is not None and correlation.get_conversion_result():
+                rule_converted = correlation.get_conversion_result()[0]
         # For esql and eql backend only
         if isinstance(platform, ElasticPlatform):
             platform.get_index_name(pipeline, rule_content)

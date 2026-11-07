@@ -23,6 +23,10 @@ alert_prefix = "PIZZA"
 [platforms.elastic.pipelines.vault_signin_attempts]
 
 pipelines = ["tests/files/elastic/pipeline_signin_attempts.yml"]
+pipelines_correlation = [
+    "tests/files/elastic/pipeline_signin_attempts.yml",
+    "tests/files/elastic/pipeline_signin_attempts_correlation.yml",
+]
 product = "vault"
 service = "signin_attempts"
 

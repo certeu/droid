@@ -144,6 +144,76 @@ def test_esql_quotes_field_names_it_cannot_parse(field, quoted):
 
 
 # ---------------------------------------------------------------------------
+# Correlations
+# ---------------------------------------------------------------------------
+
+EVENT_COUNT_RULE = "tests/files/elastic/correlation_event_count.yml"
+VALUE_COUNT_RULE = "tests/files/elastic/correlation_value_count.yml"
+TEMPORAL_RULE = "tests/files/elastic/correlation_temporal.yml"
+
+CORRELATION_SOURCE = "FROM logs-signin-attempts-planet-express-default METADATA _id, _index, _version"
+
+
+def test_correlation_converts_to_the_correlation_query():
+    """The file also holds a rule the correlation does not reference, and the
+    backend emits that one first: it must not be what gets deployed"""
+    query = convert("esql", EVENT_COUNT_RULE)
+
+    assert query.splitlines() == [
+        CORRELATION_SOURCE,
+        '| WHERE labels.module=="vault-events" AND `1vault.signinattempts.category`=="credentials_failed"',
+        "| EVAL timebucket=date_trunc(10minutes, @timestamp)",
+        "| STATS event_count=count() BY timebucket, `1vault.signinattempts.target_user.email`",
+        "| WHERE event_count >= 5",
+    ]
+
+
+def test_value_count_correlation_counts_the_mapped_field():
+    query = convert("esql", VALUE_COUNT_RULE)
+
+    assert query.splitlines()[0] == CORRELATION_SOURCE
+    assert (
+        "| STATS value_count=count_distinct(`1vault.signinattempts.country`)"
+        " BY timebucket, `1vault.signinattempts.target_user.email`"
+    ) in query
+    assert query.endswith("| WHERE value_count >= 3")
+
+
+def test_temporal_correlation_types_each_event():
+    query = convert("esql", TEMPORAL_RULE)
+
+    assert query.splitlines()[0] == CORRELATION_SOURCE
+    assert '"vault_signin_failure"' in query and '"vault_signin_success"' in query
+    assert query.endswith("| WHERE event_type_count >= 2")
+
+
+def test_atomic_rule_of_a_correlated_source_keeps_the_atomic_pipelines():
+    """pipelines_correlation only applies to correlation rules"""
+    query = convert("esql", SIGNIN_RULE)
+
+    assert query.startswith("FROM *-signin-attempts-planet-express-* METADATA")
+
+
+def test_export_correlation_looks_back_over_its_timespan():
+    """Kibana only hands the query the events between `from` and now: a
+    one hour correlation run every five minutes must still see the hour"""
+    rule = {**RULE_CONTENT, "correlation": {"type": "value_count", "timespan": "1h"}}
+
+    payload = export(build_platform(), rule)
+
+    assert payload["interval"] == "5m"
+    assert payload["from"] == "now-3900s"
+
+
+def test_export_correlation_look_back_adds_the_additional_look_back():
+    rule = {**RULE_CONTENT, "correlation": {"type": "event_count", "timespan": "10m"}}
+
+    payload = export(build_platform(additional_look_back="1m"), rule)
+
+    assert payload["from"] == "now-960s"
+
+
+# ---------------------------------------------------------------------------
 # Deduplication metadata
 # ---------------------------------------------------------------------------
 
@@ -314,6 +384,57 @@ def test_rule_changes_detect_a_rule_no_longer_building_block():
     assert platform.check_rule_changes(building_block, plain) is True
 
 
+CORRELATION_QUERY = (
+    "FROM logs-* METADATA _id, _index, _version\n"
+    '| WHERE `1vault.signinattempts.category`=="credentials_failed"\n'
+    "| EVAL timebucket=date_trunc(10minutes, @timestamp)\n"
+    "| STATS event_count=count() BY timebucket, `1vault.signinattempts.target_user.email`, host.name\n"
+    "| WHERE event_count >= 5"
+)
+CORRELATION_CONTENT = {**RULE_CONTENT, "correlation": {"type": "event_count", "timespan": "10m"}}
+
+
+def test_export_correlation_suppresses_the_alerts_of_a_group_already_raised():
+    """Each run sees the bucket again: without suppression every run alerts on it"""
+    payload = export(build_platform(), CORRELATION_CONTENT, CORRELATION_QUERY)
+
+    assert payload["alert_suppression"] == {
+        "group_by": ["timebucket", "1vault.signinattempts.target_user.email", "host.name"],
+        "duration": {"value": 900, "unit": "s"},
+        "missing_fields_strategy": "suppress",
+    }
+
+
+def test_export_correlation_suppression_can_be_turned_off():
+    """Alert suppression needs a Platinum license"""
+    payload = export(build_platform(suppress_correlation_alerts=False), CORRELATION_CONTENT, CORRELATION_QUERY)
+
+    assert "alert_suppression" not in payload
+
+
+def test_export_correlation_grouped_by_too_many_fields_is_not_suppressed():
+    """Kibana suppresses on three fields at most"""
+    query = CORRELATION_QUERY.replace("host.name", "host.name, source.ip, user.domain")
+
+    payload = export(build_platform(), CORRELATION_CONTENT, query)
+
+    assert "alert_suppression" not in payload
+
+
+def test_export_atomic_rule_is_not_suppressed():
+    payload = export(build_platform())
+
+    assert "alert_suppression" not in payload
+
+
+def test_rule_changes_detect_alert_suppression():
+    platform = build_platform()
+    suppressed = export(platform, CORRELATION_CONTENT, CORRELATION_QUERY)
+    unsuppressed = {key: value for key, value in suppressed.items() if key != "alert_suppression"}
+
+    assert platform.check_rule_changes(unsuppressed, suppressed) is True
+
+
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
@@ -415,6 +536,57 @@ def test_esql_query_runs_on_a_live_cluster(rule):
     response = client.esql.query(query=convert("esql", rule).strip())
 
     assert len(response["values"]) == (1 if rule == SIGNIN_RULE else 0)
+
+
+LIVE_SIGN_INS = [
+    # Kif fails five times, then gets in
+    *[("kif@planet-express.local", "credentials_failed", "Earth", minute) for minute in range(1, 6)],
+    ("kif@planet-express.local", "success", "Earth", 6),
+    # Amy signs in from three planets
+    ("amy@planet-express.local", "success", "Earth", 1),
+    ("amy@planet-express.local", "success", "Mars", 2),
+    ("amy@planet-express.local", "success", "Moon", 3),
+    # Hermes fails once and gives up
+    ("hermes@planet-express.local", "credentials_failed", "Earth", 4),
+]
+
+
+@pytest.mark.skipif(not LIVE_ELASTICSEARCH, reason="DROID_TEST_ELASTICSEARCH_URL is not set")
+@pytest.mark.parametrize(
+    "rule, user",
+    [
+        (EVENT_COUNT_RULE, "kif@planet-express.local"),
+        (VALUE_COUNT_RULE, "amy@planet-express.local"),
+        (TEMPORAL_RULE, "kif@planet-express.local"),
+    ],
+)
+def test_correlation_runs_on_a_live_cluster(rule, user):
+    client = seed_live_cluster()
+    seed = client.options(ignore_status=409).index
+    for number, (email, category, country, minute) in enumerate(LIVE_SIGN_INS):
+        seed(
+            index="logs-signin-attempts-planet-express-default",
+            id=f"correlated-{number}",
+            op_type="create",
+            refresh=True,
+            document={
+                "@timestamp": f"2026-11-07T08:0{minute}:00Z",
+                "labels": {"module": "vault-events"},
+                "1vault": {
+                    "signinattempts": {
+                        "category": category,
+                        "country": country,
+                        "target_user": {"email": email},
+                    }
+                },
+            },
+        )
+
+    response = client.esql.query(query=convert("esql", rule))
+
+    columns = [column["name"] for column in response["columns"]]
+    users = [row[columns.index("1vault.signinattempts.target_user.email")] for row in response["values"]]
+    assert users == [user]
 
 
 @pytest.mark.skipif(not LIVE_ELASTICSEARCH, reason="DROID_TEST_ELASTICSEARCH_URL is not set")

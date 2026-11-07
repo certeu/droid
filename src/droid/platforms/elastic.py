@@ -49,7 +49,7 @@ EQL_UNQUOTED_FIELD = unquoted_field_pattern(EQL_RESERVED_WORDS)
 
 ESQL_METADATA_FIELDS = "_id, _index, _version"
 
-TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
 @cache
@@ -124,7 +124,7 @@ def eql_backend(backend_class):
 def time_to_seconds(value, unit=None) -> int:
     """Convert "5m", or 5 with the unit "m", into seconds"""
 
-    match = re.fullmatch(r"(\d+)\s*([smhd])?", f"{value}{unit or ''}".strip())
+    match = re.fullmatch(r"(\d+)\s*([smhdw])?", f"{value}{unit or ''}".strip())
     if not match or not match.group(2):
         raise ValueError(f"Invalid duration: '{value}{unit or ''}' (expected e.g. 90s, 5m, 1h or 1d)")
 
@@ -217,11 +217,12 @@ class ElasticPlatform(AbstractPlatform):
 
         # Extra look-back so an event ingested after the previous run is not missed
         self._additional_look_back = self._parameters.get("additional_look_back")
-        if self._additional_look_back:
-            self._look_back_seconds = (
-                time_to_seconds(self._schedule_interval, self._schedule_interval_unit)
-                + time_to_seconds(self._additional_look_back)
-            )
+        self._additional_look_back_seconds = (
+            time_to_seconds(self._additional_look_back) if self._additional_look_back else 0
+        )
+
+        # Alert suppression needs a Platinum license
+        self._suppress_correlation_alerts = self._parameters.get("suppress_correlation_alerts", True)
 
         self._auth_method = self._parameters.get("auth_method", "basic")
         if self._auth_method == "basic":
@@ -454,6 +455,7 @@ class ElasticPlatform(AbstractPlatform):
             "false_positives",
             "references",
             "building_block_type",
+            "alert_suppression",
         ]
         if new_rule.get("index"):
             fields.append("index")
@@ -517,6 +519,20 @@ class ElasticPlatform(AbstractPlatform):
 
         return f"{source} {clause}{rest}"
 
+    @staticmethod
+    def correlation_group_by(query):
+        """Return the fields the aggregation of an ES|QL correlation groups by"""
+
+        stats = [line for line in query.splitlines() if line.startswith("| STATS ")]
+        if not stats or " BY " not in stats[-1]:
+            return []
+
+        fields = stats[-1].rsplit(" BY ", 1)[1].split(", ")
+        return [
+            field[1:-1].replace("``", "`") if field.startswith("`") else field
+            for field in fields
+        ]
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
@@ -579,8 +595,17 @@ class ElasticPlatform(AbstractPlatform):
 
 
         interval = f"{self._schedule_interval}{self._schedule_interval_unit}"
-        if self._additional_look_back:
-            look_back = f"now-{self._look_back_seconds}s"
+        extra_look_back = self._additional_look_back_seconds
+        # Kibana only hands the query the events since `from`: a correlation
+        # must see its whole timespan, whichever bucket the run falls in
+        timespan = (rule_content.get("correlation") or {}).get("timespan")
+        if timespan:
+            extra_look_back += time_to_seconds(timespan)
+        look_back_seconds = (
+            time_to_seconds(self._schedule_interval, self._schedule_interval_unit) + extra_look_back
+        )
+        if extra_look_back:
+            look_back = f"now-{look_back_seconds}s"
         else:
             look_back = f"now-{interval}"
 
@@ -625,6 +650,23 @@ class ElasticPlatform(AbstractPlatform):
             json_data["building_block_type"] = "default"
         if "falsepositives" in rule_content:
             json_data["false_positives"] = rule_content["falsepositives"]
+
+        # An aggregating query has no _id to deduplicate on, and every run
+        # within the look-back sees the same bucket again: suppress the alerts
+        # of a group already raised for as long as a run can see it
+        if language == "esql" and timespan and self._suppress_correlation_alerts:
+            group_by = self.correlation_group_by(rule_converted)
+            if len(group_by) > 3:
+                self.logger.warning(
+                    f"Correlation {rule_file} groups by more than the 3 fields Kibana can suppress on, "
+                    "each run will raise its alerts again"
+                )
+            elif group_by:
+                json_data["alert_suppression"] = {
+                    "group_by": group_by,
+                    "duration": {"value": look_back_seconds, "unit": "s"},
+                    "missing_fields_strategy": "suppress",
+                }
 
         try:
             self.kibana_import_rule(json_data, rule_content)
