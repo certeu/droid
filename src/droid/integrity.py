@@ -3,6 +3,7 @@ Module handling the integrity check of the rules on the platforms.
 """
 from __future__ import annotations
 
+import re
 import yaml
 
 from pathlib import Path
@@ -337,6 +338,16 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         return error
 
 
+def strip_esql_metadata(query):
+    """Remove the METADATA clause of an ES|QL source command, bracketed or not"""
+    return re.sub(
+        r"\s*\[?\s*\bMETADATA\s+_id\s*,\s*_index\s*,\s*_version(?:\s*\])?",
+        "",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
 def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
     try:
         saved_search: dict = platform.get_rule(rule_content["id"])
@@ -350,16 +361,15 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
 
     logger.info(f"Successfully retrieved the rule {rule_file}")
 
-    if "metadata _id, _index, _version" not in rule_converted.lower() and "metadata _id, _index, _version" in saved_search["query"].lower():
-        saved_search["query"] = saved_search["query"].replace("  METADATA _id, _index, _version", "")
-
+    # Export adds the METADATA clause Elastic needs to deduplicate alerts, so it
+    # is left out of both sides of the comparison
     result = {
         "name": saved_search["name"],
         "description": saved_search["description"],
-        "query": saved_search["query"]
+        "query": strip_esql_metadata(saved_search["query"])
     }
 
-    rule_content["detection"] = rule_converted
+    rule_content["detection"] = strip_esql_metadata(rule_converted)
 
     mapping = {
         "detection": "query",
@@ -376,20 +386,18 @@ def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatfo
             error = True
 
     # Check if disabled
-    if "custom" in rule_content and "disabled" in rule_content["custom"]:
-        is_disabled = rule_content["custom"]["disabled"]
-    else:
-        is_disabled = False
+    is_disabled = rule_content.get("custom", {}).get("disabled") is True
+    is_enabled = saved_search.get("enabled", True)
 
-    if is_disabled and not rule_content["enabled"]:
+    if is_disabled and not is_enabled:
         logger.info("The rule is disabled as expected")
-    elif is_disabled and rule_content["enabled"]:
+    elif is_disabled and is_enabled:
         logger.error("The rule is not disabled on the platform")
         error = True
-    elif is_disabled is None and not rule_content["enabled"]:
+    elif not is_enabled:
         logger.error("The rule is not enabled on the platform")
         error = True
-    elif is_disabled is None and rule_content["enabled"]:
+    else:
         logger.info("The rule is enabled as expected")
 
     if error:

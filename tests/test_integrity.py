@@ -94,8 +94,8 @@ def build_sentinel_rule(query="the deployed query", description="A rule", enable
     )
 
 
-def build_elastic_rule(query="the deployed query", description="A rule"):
-    return {"name": RULE_ID, "description": description, "query": query}
+def build_elastic_rule(query="the deployed query", description="A rule", enabled=True):
+    return {"name": RULE_ID, "description": description, "query": query, "enabled": enabled}
 
 
 def run_integrity(platform, rule_content, rule_converted, mssp=False, platform_name="microsoft_xdr"):
@@ -312,5 +312,44 @@ def test_elastic_rule_matching_the_platform():
     platform = FakeElasticPlatform(build_elastic_rule(query="the new query"))
     error = run_integrity(
         platform, build_rule_content(), "the new query", platform_name="esql"
+    )
+    assert not error
+
+
+def test_elastic_rule_disabled_but_enabled_on_the_platform():
+    """A rule marked disabled must not be running on Elastic"""
+    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=True))
+    rule_content = {**build_rule_content(), "custom": {"disabled": True}}
+    error = run_integrity(platform, rule_content, "the new query", platform_name="esql")
+    assert error
+
+
+def test_elastic_rule_disabled_on_the_platform():
+    """A rule not marked disabled must be running on Elastic"""
+    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=False))
+    error = run_integrity(platform, build_rule_content(), "the new query", platform_name="esql")
+    assert error
+
+
+def test_elastic_rule_disabled_as_expected():
+    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=False))
+    rule_content = {**build_rule_content(), "custom": {"disabled": True}}
+    error = run_integrity(platform, rule_content, "the new query", platform_name="esql")
+    assert not error
+
+
+@pytest.mark.parametrize(
+    "deployed",
+    [
+        "FROM logs-* METADATA _id, _index, _version | WHERE true",
+        "FROM logs-*  METADATA _id, _index, _version | WHERE true",
+        "FROM logs-* [METADATA _id, _index, _version] | WHERE true",
+    ],
+)
+def test_elastic_metadata_added_on_export_is_not_a_difference(deployed):
+    """Export adds the METADATA clause Elastic needs to deduplicate alerts"""
+    platform = FakeElasticPlatform(build_elastic_rule(query=deployed))
+    error = run_integrity(
+        platform, build_rule_content(), "FROM logs-* | WHERE true", platform_name="esql"
     )
     assert not error

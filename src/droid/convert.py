@@ -15,7 +15,7 @@ from sigma.exceptions import SigmaConversionError
 from droid.search import search_rule
 from droid.export import export_rule
 from droid.integrity import integrity_rule
-from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.elastic import ElasticPlatform, eql_backend, esql_backend
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 from droid.rule_loader import load_rule_content
@@ -265,6 +265,10 @@ class Conversion:
             return None
 
         backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
+        if self._platform_name == "esql":
+            backend_class = esql_backend(backend_class)
+        elif self._platform_name == "eql":
+            backend_class = eql_backend(backend_class)
         if pipeline_config:
             pipeline = pipeline_resolver.resolve(pipeline_config)
         else:

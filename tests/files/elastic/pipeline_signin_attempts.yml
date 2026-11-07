@@ -1,0 +1,35 @@
+name: Vault sign-in attempts on Elastic
+priority: 90
+
+transformations:
+
+- id: index_set_state
+  type: set_state
+  key: "index"
+  val: "*-signin-attempts-planet-express-*"
+  rule_conditions:
+    - type: logsource
+      product: vault
+      service: signin_attempts
+
+- id: add_pre_conditions
+  type: add_condition
+  conditions:
+    labels.module: "vault-events"
+  rule_conditions:
+    - type: logsource
+      product: vault
+      service: signin_attempts
+
+# The vendor prefix starts with a digit, which ES|QL only accepts quoted
+- id: map_signin_attempt_fields
+  type: field_name_mapping
+  mapping:
+    target_user.email: 1vault.signinattempts.target_user.email
+    category: 1vault.signinattempts.category
+    country: 1vault.signinattempts.country
+    delivered.by: delivery.by
+  rule_conditions:
+    - type: logsource
+      product: vault
+      service: signin_attempts

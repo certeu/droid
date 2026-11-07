@@ -6,6 +6,7 @@ import re
 import time
 import requests
 
+from functools import cache
 from droid.color import ColorLogger
 from droid.abstracts import AbstractPlatform
 from droid.platforms.common import get_search_days_ago
@@ -17,6 +18,118 @@ from sigma.data.mitre_attack import (
 )
 
 from elasticsearch import Elasticsearch
+
+# ES|QL and EQL only parse a dotted field name unquoted when every segment
+# starts with a letter (or with _ or @ followed by more) and is not a reserved
+# word, which holds even for the last segment: `1password.category` and
+# `delivery.by` must be backtick quoted. Reserved words checked against
+# Elasticsearch 9.5.
+ESQL_RESERVED_WORDS = (
+    "and", "or", "not", "like", "rlike", "in", "is", "null", "true", "false",
+    "first", "last", "asc", "desc", "nulls", "by", "on", "with", "where",
+)
+EQL_RESERVED_WORDS = (
+    "and", "or", "not", "like", "regex", "in", "null", "true", "false", "by",
+    "with", "where", "any", "of", "sequence", "sample", "join", "until", "maxspan",
+)
+
+
+def unquoted_field_pattern(reserved_words):
+    """Match the field names a query language parses without backticks"""
+
+    segment = (
+        rf"(?!(?:{'|'.join(reserved_words)})(?:\.|$))"
+        r"(?:[a-z][a-z0-9_]*|[_@][a-z0-9_]+)"
+    )
+    return re.compile(rf"^{segment}(?:\.{segment})*$", re.IGNORECASE)
+
+
+ESQL_UNQUOTED_FIELD = unquoted_field_pattern(ESQL_RESERVED_WORDS)
+EQL_UNQUOTED_FIELD = unquoted_field_pattern(EQL_RESERVED_WORDS)
+
+ESQL_METADATA_FIELDS = "_id, _index, _version"
+
+TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+@cache
+def esql_backend(backend_class):
+    """Wrap the ES|QL backend so its queries parse and read like Elastic's own
+
+    The backend leaves field names such as `1password.category` unquoted, which
+    Elasticsearch refuses to parse, and writes the whole pipeline in lower case
+    on one line. The wrapper quotes what ES|QL cannot parse and renders
+    `FROM … METADATA …` followed by one upper-case command per line.
+    """
+
+    class DroidESQLBackend(backend_class):
+        field_quote_pattern = ESQL_UNQUOTED_FIELD
+        field_escape = "`"  # a backtick inside a quoted name is doubled
+
+        and_token = "AND"
+        or_token = "OR"
+        not_token = "NOT"
+        wildcard_match_expression = "{field} LIKE {value}"
+        re_expression = '{field} RLIKE "{regex}"'
+        field_null_expression = "{field} IS NULL"
+        field_exists_expression = "{field} IS NOT NULL"
+        field_not_exists_expression = "{field} IS NULL"
+        or_in_operator = "IN"
+
+        correlation_search_multi_rule_query_expression_joiner = " OR "
+        typing_expression = "| EVAL event_type=case({queries})"
+        event_count_aggregation_expression = {
+            "stats": "| EVAL timebucket=date_trunc({timespan}, @timestamp)\n"
+                     "| STATS event_count=count(){fields}{groupby}"
+        }
+        value_count_aggregation_expression = {
+            "stats": "| EVAL timebucket=date_trunc({timespan}, @timestamp)\n"
+                     "| STATS value_count=count_distinct({field}){fields}{groupby}"
+        }
+        temporal_aggregation_expression = {
+            "stats": "| EVAL timebucket=date_trunc({timespan}, @timestamp)\n"
+                     "| STATS event_type_count=count_distinct(event_type){fields}{groupby}"
+        }
+        groupby_expression_nofield = {"stats": " BY timebucket"}
+        groupby_expression = {"stats": " BY timebucket{fields}"}
+        event_count_condition_expression = {"stats": "| WHERE event_count {op} {count}"}
+        value_count_condition_expression = {"stats": "| WHERE value_count {op} {count}"}
+        temporal_condition_expression = {"stats": "| WHERE event_type_count {op} {count}"}
+
+        def finalize_query_default(self, rule, query, index, state):
+            metadata = state.processing_state.get("metadata", self.state_defaults["metadata"])
+            index_state = state.processing_state.get("index", self.state_defaults["index"])
+
+            return f"FROM {index_state} METADATA {metadata}\n| WHERE {query}"
+
+    return DroidESQLBackend
+
+
+@cache
+def eql_backend(backend_class):
+    """Wrap the EQL backend so it quotes every field name EQL cannot parse
+
+    The backend only quotes a name starting with a digit or holding a space or
+    a dash, which leaves out `vault.1category` and reserved words like `by`.
+    """
+
+    class DroidEqlBackend(backend_class):
+        field_quote_pattern = EQL_UNQUOTED_FIELD
+        field_quote_pattern_negation = True
+        field_escape = "`"  # a backtick inside a quoted name is doubled
+
+    return DroidEqlBackend
+
+
+def time_to_seconds(value, unit=None) -> int:
+    """Convert "5m", or 5 with the unit "m", into seconds"""
+
+    match = re.fullmatch(r"(\d+)\s*([smhd])?", f"{value}{unit or ''}".strip())
+    if not match or not match.group(2):
+        raise ValueError(f"Invalid duration: '{value}{unit or ''}' (expected e.g. 90s, 5m, 1h or 1d)")
+
+    return int(match.group(1)) * TIME_UNIT_SECONDS[match.group(2)]
+
 
 class ElasticPlatform(AbstractPlatform):
 
@@ -100,10 +213,26 @@ class ElasticPlatform(AbstractPlatform):
         self._legacy_esql = self._parameters["legacy_esql"]
         self._language = language
         self._raw = raw
+        self._index_name = None  # resolved while converting an EQL rule
 
-        if self._parameters["auth_method"] == "basic":
-            self._username = self._parameters["username"]
-            self._password = self._parameters["password"]
+        # Extra look-back so an event ingested after the previous run is not missed
+        self._additional_look_back = self._parameters.get("additional_look_back")
+        if self._additional_look_back:
+            self._look_back_seconds = (
+                time_to_seconds(self._schedule_interval, self._schedule_interval_unit)
+                + time_to_seconds(self._additional_look_back)
+            )
+
+        self._auth_method = self._parameters.get("auth_method", "basic")
+        if self._auth_method == "basic":
+            self._username = self._parameters.get("username")
+            self._password = self._parameters.get("password")
+        elif self._auth_method == "api_key":
+            self._api_key = self._parameters.get("api_key")
+        else:
+            raise ValueError(
+                f"ElasticPlatform: unsupported 'auth_method' '{self._auth_method}', use 'basic' or 'api_key'."
+            )
 
         if "alert_prefix" in self._parameters:
             self._alert_prefix = self._parameters["alert_prefix"]
@@ -135,69 +264,81 @@ class ElasticPlatform(AbstractPlatform):
         else:
             return 100
 
-    def mitre_attack_parser(self, tag):
-        tag = tag.replace("attack.", "")
-        subtechnique = None
-        if tag.startswith("ta"):
-            return None
-        if tag.startswith("t"):
-            technique = tag.upper()
-            if "." in technique:  # Subtechnique
-                subtechnique = technique
-                technique = technique.split(".")[0]
-            if technique in mitre_attack_techniques:
-                threats = []
-                technique_name = mitre_attack_techniques[technique]
-                if subtechnique:
-                    subtechnique_name = mitre_attack_techniques[subtechnique]
-                tactic_names = mitre_attack_techniques_tactics_mapping[technique]
-                for tactic in mitre_attack_tactics:
-                    if mitre_attack_tactics[tactic] in tactic_names:
-                        tactic_id = tactic
-                for tactic_name in tactic_names:
-                    tactic = {
-                        "tactic": {
-                            "id": tactic_id,
-                            "reference": f"https://attack.mitre.org/tactics/{tactic_id}",
-                            "name": tactic_name.title().replace("-", " "),
-                        }
+    def mitre_attack_threats(self, tags):
+        """Build the Elastic `threat` list from the ATT&CK tags of a rule
+
+        Elastic groups techniques under their tactic: a technique belonging to
+        several tactics appears under each of them, and a subtechnique is nested
+        in its technique. A tactic tag without technique keeps its own entry.
+        """
+
+        tactic_ids = {name: tactic_id for tactic_id, name in mitre_attack_tactics.items()}
+        threats = {}  # tactic id -> threat entry
+
+        def tactic_entry(tactic_id):
+            if tactic_id not in threats:
+                name = mitre_attack_tactics[tactic_id]
+                threats[tactic_id] = {
+                    "framework": "MITRE ATT&CK",
+                    "tactic": {
+                        "id": tactic_id,
+                        "name": " ".join(
+                            word if word == "and" else word.capitalize() for word in name.split("-")
+                        ),
+                        "reference": f"https://attack.mitre.org/tactics/{tactic_id}",
+                    },
+                    "technique": [],
+                }
+            return threats[tactic_id]
+
+        for tag in tags:
+            name = tag.lower().removeprefix("attack.").replace("_", "-")
+
+            if name.upper() in mitre_attack_tactics:
+                tactic_entry(name.upper())
+                continue
+            if name in tactic_ids:
+                tactic_entry(tactic_ids[name])
+                continue
+
+            match = re.fullmatch(r"(t\d{4})(?:\.(\d{3}))?", name)
+            if not match or match.group(1).upper() not in mitre_attack_techniques:
+                continue
+
+            technique_id = match.group(1).upper()
+            subtechnique_id = f"{technique_id}.{match.group(2)}" if match.group(2) else None
+            if subtechnique_id and subtechnique_id not in mitre_attack_techniques:
+                self.logger.warning(f"Unknown ATT&CK subtechnique '{subtechnique_id}', mapping {technique_id} only")
+                subtechnique_id = None
+
+            for tactic_name in mitre_attack_techniques_tactics_mapping.get(technique_id, []):
+                if tactic_name not in tactic_ids:
+                    continue
+                techniques = tactic_entry(tactic_ids[tactic_name])["technique"]
+
+                technique = next((t for t in techniques if t["id"] == technique_id), None)
+                if technique is None:
+                    technique = {
+                        "id": technique_id,
+                        "name": mitre_attack_techniques[technique_id],
+                        "reference": f"https://attack.mitre.org/techniques/{technique_id}",
+                        "subtechnique": [],
                     }
-                    if subtechnique:
-                        x, y = subtechnique.split(".")
-                        technique = {
-                            "technique": [
-                                {
-                                    "id": technique,
-                                    "reference": f"https://attack.mitre.org/techniques/{technique}",
-                                    "name": technique_name,
-                                    "subtechnique": [
-                                        {
-                                            "id": subtechnique,
-                                            "reference": f"https://attack.mitre.org/techniques/{x}/{y}",
-                                            "name": subtechnique_name,
-                                        }
-                                    ],
-                                }
-                            ]
-                        }
-                    else:
-                        technique = {
-                            "technique": [
-                                {
-                                    "id": technique,
-                                    "reference": f"https://attack.mitre.org/techniques/{technique}",
-                                    "name": technique_name,
-                                }
-                            ]
-                        }
-                    threat = {
-                        **tactic,
-                        "framework": "MITRE ATT&CK",
-                        **technique,
-                    }
-                    threats.append(threat)
-                    return threats
-        return None
+                    techniques.append(technique)
+
+                if subtechnique_id and all(s["id"] != subtechnique_id for s in technique["subtechnique"]):
+                    technique["subtechnique"].append({
+                        "id": subtechnique_id,
+                        "name": mitre_attack_techniques[subtechnique_id],
+                        "reference": "https://attack.mitre.org/techniques/" + subtechnique_id.replace(".", "/"),
+                    })
+
+        for threat in threats.values():
+            for technique in threat["technique"]:
+                if not technique["subtechnique"]:
+                    del technique["subtechnique"]
+
+        return list(threats.values())
 
     def get_index_name(self, pipeline, rule_content):
         index_value = "logs-*"
@@ -242,79 +383,85 @@ class ElasticPlatform(AbstractPlatform):
             self.logger.error("Index name in pipeline is missing or malformed")
             raise ValueError("Index name in pipeline is missing or malformed")
 
-    def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
-        """Remove an analytic rule in Elastic"""
-        params = {
-            "rule_id": rule_content["id"],
-        }
-        headers = {
-            "kbn-xsrf": "true",
-        }
-        response = requests.delete(
+    def kibana_request(self, method, **kwargs):
+        """Send a request to the Kibana detection engine rules API"""
+
+        headers = {"kbn-xsrf": "true", **kwargs.pop("headers", {})}
+        if self._auth_method == "api_key":
+            headers["Authorization"] = f"ApiKey {self._api_key}"
+            auth = None
+        else:
+            auth = HTTPBasicAuth(self._username, self._password)
+
+        return getattr(requests, method)(
             self._kibana_url + "/api/detection_engine/rules",
-            params=params,
             headers=headers,
             verify=self._tls_verified,
-            auth=HTTPBasicAuth(self._username, self._password),
+            auth=auth,
+            **kwargs,
         )
+
+    def elastic_client(self):
+        """Build an Elasticsearch client authenticated like Kibana requests"""
+
+        if self._auth_method == "api_key":
+            credentials = {"api_key": self._api_key}
+        else:
+            credentials = {"basic_auth": (self._username, self._password)}
+
+        return Elasticsearch(
+            self._elastic_hosts,
+            verify_certs=self._elastic_tls_verify,
+            ca_certs=self._elastic_ca,
+            request_timeout=300,
+            max_retries=3,
+            **credentials,
+        )
+
+    def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
+        """Remove an analytic rule in Elastic"""
+        response = self.kibana_request("delete", params={"rule_id": rule_content["id"]})
         if response.status_code == 200:
             return response.json()
         else:
             return False
 
     def get_rule(self, rule_id):
-        params = {
-            "rule_id": rule_id,
-        }
-        headers = {
-            "kbn-xsrf": "true",
-        }
-        response = requests.get(
-            self._kibana_url + "/api/detection_engine/rules",
-            params=params,
-            headers=headers,
-            verify=self._tls_verified,
-            auth=HTTPBasicAuth(self._username, self._password),
-        )
+        response = self.kibana_request("get", params={"rule_id": rule_id})
         if response.status_code == 200:
             return response.json()
         else:
             return False
 
     def check_rule_changes(self, existing_rule, new_rule):
-        try:
-            fields = [
-                "name",
-                "description",
-                "query",
-                "language",
-                "severity",
-                "risk_score",
-                "threat",
-                "tags",
-                "enabled",
-                "interval",
-                "author",
-                "from",
-                "to",
-                "license",
-                "actions"
-            ]
-            if new_rule["index"]:
-                fields.append("index")
-            if "falsepositives" in new_rule:
-                fields.append("falsepositives")
-            if "references" in new_rule:
-                fields.append("references")
-            if "building_block_type" in new_rule:
-                fields.append("building_block_type")
-            for field in fields:
-                if existing_rule[field] != new_rule[field]:
-                    self.logger.info(f"Rule '{new_rule['name']}' has changed")
-                    return True
-        except Exception as e:
-            self.logger.error(f"Error while checking rule changes {e}")
-            return True
+        fields = [
+            "name",
+            "description",
+            "query",
+            "language",
+            "severity",
+            "risk_score",
+            "threat",
+            "tags",
+            "enabled",
+            "interval",
+            "author",
+            "from",
+            "to",
+            "license",
+            "actions",
+            # Optional: a value dropped from the rule must be dropped on Kibana too
+            "false_positives",
+            "references",
+            "building_block_type",
+        ]
+        if new_rule.get("index"):
+            fields.append("index")
+        for field in fields:
+            # Kibana returns empty lists for optional list fields never set
+            if (existing_rule.get(field) or None) != (new_rule.get(field) or None):
+                self.logger.info(f"Rule '{new_rule['name']}' has changed")
+                return True
         self.logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
         return False
 
@@ -328,88 +475,62 @@ class ElasticPlatform(AbstractPlatform):
             existing_rule = False
         if existing_rule:
             if self.check_rule_changes(existing_rule, json_data):
-
-                params = {
-                    "overwrite": "true",
-                }
-                headers = {
-                    "kbn-xsrf": "true",
-                }
-                response = requests.put(
-                    self._kibana_url + "/api/detection_engine/rules",
-                    params=params,
-                    headers=headers,
-                    json=json_data,
-                    verify=self._tls_verified,
-                    auth=HTTPBasicAuth(self._username, self._password),
-                )
+                response = self.kibana_request("put", params={"overwrite": "true"}, json=json_data)
             else:
-                self.logger.info(
-                    f"Rule '{json_data['name']}' already exists and is up to date"
-                )
                 return True
         else:
-            headers = {
-                "kbn-xsrf": "true",
-            }
-            response = requests.post(
-                self._kibana_url + "/api/detection_engine/rules",
-                headers=headers,
-                json=json_data,
-                verify=self._tls_verified,
-                auth=HTTPBasicAuth(self._username, self._password),
-            )
+            response = self.kibana_request("post", json=json_data)
 
         if response.status_code == 200:
             return True
         else:
             raise Exception(response.text)
 
-    def  cleanup_esql_query(self, query):
-        # For the deduplication of Alerts each query needs the following fields after the FROM Statement:
-        # METADATA _id, _index, _version
-        # Example: FROM logs-* METADATA _id, _index, _version
-        # https://www.elastic.co/guide/en/security/8.15/rules-ui-create.html#esql-non-agg-query-dedupe
+    def cleanup_esql_query(self, query):
+        """Add the METADATA clause Elastic needs to deduplicate alerts
+
+        A non-aggregating ES|QL rule must read `_id, _index, _version` in its
+        source command, e.g. `FROM logs-* METADATA _id, _index, _version`.
+        https://www.elastic.co/guide/en/security/current/rules-ui-create.html#esql-non-agg-query-dedupe
+        """
         lowerquery = query.lower()
         # Ignore Correlation Rules because they already deduplicate themselves
         if "stats " in lowerquery and " by " in lowerquery:
             return query
-        # Ignore if the query already contains the fields
-        if "METADATA" and "_id" and "_index" and "_version" in lowerquery:
-            return query
-        # (^[^\|]*) - Match everything before the first pipe
-        try:
-            # Older Elastic Versions need brackets around the Metadata fields
-            # Newer ones deprecated the brackets
-            # Hence the legacy_esql flag
-            if self._legacy_esql:
-                query = re.sub(r"(^[^\|]*)", r"\1 [METADATA _id, _index, _version] ", query)
-            else:
-                query = re.sub(r"(^[^\|]*)", r"\1 METADATA _id, _index, _version ", query)
-        except Exception as e:
-            self.logger.error(f"Error while preparing rule for deduplication {e}")
-        return query
 
+        # The source command runs up to the first pipe
+        source_command = query.split("|", 1)[0]
+        if re.search(r"\bmetadata\b", source_command, re.IGNORECASE):
+            return query
+
+        # Older Elastic versions need brackets around the METADATA clause and
+        # newer ones deprecated them, hence the legacy_esql flag
+        if self._legacy_esql:
+            clause = f"[METADATA {ESQL_METADATA_FIELDS}]"
+        else:
+            clause = f"METADATA {ESQL_METADATA_FIELDS}"
+
+        source = source_command.rstrip()
+        rest = query[len(source):]
+        if rest and not rest[0].isspace():
+            rest = " " + rest
+
+        return f"{source} {clause}{rest}"
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Elastic
         Create a scheduled alert rule in Elastic
         """
 
-        threat = []
-        tags = []
-        if "tags" in rule_content and rule_content["tags"]:
-            for tag in rule_content["tags"]:
-                if tag.startswith("attack."):
-                    parsed = self.mitre_attack_parser(tag)
-                    if parsed:
-                        threat += parsed
-                else:
-                    tags.append(tag)
+        rule_tags = rule_content.get("tags") or []
+        threat = self.mitre_attack_threats([tag for tag in rule_tags if tag.startswith("attack.")])
+        tags = [tag for tag in rule_tags if not tag.startswith("attack.")]
+
+        # Elastic has no informational severity, the risk score still tells it apart
+        risk_score = self.level_parser(rule_content["level"])
         severity = rule_content["level"]
         if severity == "informational":
             severity = "low"
-        risk_score = self.level_parser(severity)
         author = rule_content["author"]
         if isinstance(author, str):
             author = [author]
@@ -439,16 +560,9 @@ class ElasticPlatform(AbstractPlatform):
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
         elif self._raw:
-            self.logger.error(
-                f"Raw Languages need the custom parameter 'raw_language' to be set",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": e,
-                },
+            raise ValueError(
+                f"Raw rule {rule_file} needs the custom parameter 'raw_language' to be set"
             )
-            raise
 
         if language == "esql":
             self._index_name = None
@@ -464,43 +578,45 @@ class ElasticPlatform(AbstractPlatform):
                 self._index_name = rule_content["custom"]["index"]
 
 
-        try:
-            # Build the json_data for kibana import
-            json_data = {
-                "name": display_name,
-                "enabled": enabled,
-                "interval": f"{self._schedule_interval}{self._schedule_interval_unit}",
-                "author": author,
-                "description": rule_content["description"],
-                "rule_id": rule_content["id"],
-                "from": f"now-{self._schedule_interval}{self._schedule_interval_unit}",  # TODO: This should actually always be slightly more than the interval, either make it a parameter or calculate it.
-                "immutable": False,
-                "license": self._license,
-                "output_index": "",  # TODO: Check if there should be a parameter for this
-                "meta": {"from": "5m"},
-                "max_signals": 100,  # TODO: Check if there should be a parameter for this
-                "risk_score": risk_score,
-                "risk_score_mapping": [],  # TODO: Check if this should be configurable
-                "severity": severity,
-                "severity_mapping": [],  # TODO: Check if this should be configurable
-                "threat": threat,
-                "tags": tags,
-                "to": "now",
-                "version": 1,  # TODO: Check if this actually matters
-                "exceptions_list": [],
-                "related_integrations": [],
-                "required_fields": [],
-                "setup": "",
-                "type": language,
-                "language": language,
-                "index": self._index_name,
-                "query": rule_converted,
-                "filters": [],
-                "actions": [],
-            }
-        except Exception as e:
-            print(e)
+        interval = f"{self._schedule_interval}{self._schedule_interval_unit}"
+        if self._additional_look_back:
+            look_back = f"now-{self._look_back_seconds}s"
+        else:
+            look_back = f"now-{interval}"
 
+        # Build the json_data for kibana import
+        json_data = {
+            "name": display_name,
+            "enabled": enabled,
+            "interval": interval,
+            "author": author,
+            "description": rule_content["description"],
+            "rule_id": rule_content["id"],
+            "from": look_back,
+            "immutable": False,
+            "license": self._license,
+            "output_index": "",  # TODO: Check if there should be a parameter for this
+            "meta": {"from": self._additional_look_back or "5m"},  # look-back shown by Kibana
+            "max_signals": 100,  # TODO: Check if there should be a parameter for this
+            "risk_score": risk_score,
+            "risk_score_mapping": [],  # TODO: Check if this should be configurable
+            "severity": severity,
+            "severity_mapping": [],  # TODO: Check if this should be configurable
+            "threat": threat,
+            "tags": tags,
+            "to": "now",
+            "version": 1,  # TODO: Check if this actually matters
+            "exceptions_list": [],
+            "related_integrations": [],
+            "required_fields": [],
+            "setup": "",
+            "type": language,
+            "language": language,
+            "index": self._index_name,
+            "query": rule_converted,
+            "filters": [],
+            "actions": [],
+        }
 
         # TODO: It might be a good idea to add more optional fields
         if "references" in rule_content:
@@ -559,24 +675,16 @@ class ElasticPlatform(AbstractPlatform):
             query=query,
             filter={"range": {"@timestamp": {"gte": range_gte or self._esql_search_range_gte}}},
         )
-        if "values" in response:
-            return len(response["values"])
+        return len(response.get("values", []))
 
     def run_elastic_search(self, rule_converted, language=None, rule_content=None):
 
-        es_client = Elasticsearch(
-            self._elastic_hosts,
-            basic_auth=(self._username, self._password),
-            verify_certs=self._elastic_tls_verify,
-            ca_certs=self._elastic_ca,
-            request_timeout=300,
-            max_retries=3,
-        )
+        es_client = self.elastic_client()
 
         index = self._index_name
         if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
-        print(language)
+        self.logger.debug(f"Searching with the {language} language")
         # A rule lookback is expressed in days, which Elastic takes as date math
         days_ago = get_search_days_ago(rule_content, None, self.logger)
         range_gte = f"now-{days_ago}d" if days_ago else None
