@@ -22,7 +22,7 @@ from sigma.exceptions import SigmaConversionError
 
 # ES|QL and EQL only parse a dotted field name unquoted when every segment
 # starts with a letter (or with _ or @ followed by more) and is not a reserved
-# word, which holds even for the last segment: `1password.category` and
+# word, which holds even for the last segment: `1vendor.category` and
 # `delivery.by` must be backtick quoted. Reserved words checked against
 # Elasticsearch 9.5.
 ESQL_RESERVED_WORDS = (
@@ -209,7 +209,7 @@ TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 def esql_backend(backend_class):
     """Wrap the ES|QL backend so its queries parse and read like Elastic's own
 
-    The backend leaves field names such as `1password.category` unquoted, which
+    The backend leaves field names such as `1vendor.category` unquoted, which
     Elasticsearch refuses to parse, and writes the whole pipeline in lower case
     on one line. The wrapper quotes what ES|QL cannot parse and renders
     `FROM … METADATA …` followed by one upper-case command per line.
