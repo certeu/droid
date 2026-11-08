@@ -65,7 +65,16 @@ MITRE_TACTICS = {
     "command-and-control": "CommandAndControl",
     "exfiltration": "Exfiltration",
     "impact": "Impact",
+    # ATT&CK v18 split Defense Evasion into these two, which Microsoft does
+    # not know: its validation still follows an earlier ATT&CK
+    "stealth": "DefenseEvasion",
+    "defense-impairment": "DefenseEvasion",
 }
+
+# The pairs Graph refuses when its ATT&CK disagrees with droid's
+INVALID_TECHNIQUE_PATTERN = re.compile(
+    r"Technique '(T[0-9]{4}(?:\.[0-9]{3})?)' is not a valid parent technique under tactic '([A-Za-z]+)'"
+)
 
 # custom.actions action names, the automatedActions collection each one fills,
 # and the identifiers it accepts: every one the removed responseActions did
@@ -665,42 +674,79 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 raise
 
+    def _attack_tactics_of(self, technique, rule_file):
+        """The Graph tactics a technique belongs to in ATT&CK, or None when
+        the ATT&CK data cannot be loaded or does not know the technique"""
+        try:
+            # Loaded here: pySigma downloads ATT&CK on first use, which only
+            # rules carrying techniques need
+            from sigma.data import mitre_attack
+            mapping = mitre_attack.mitre_attack_techniques_tactics_mapping
+        except Exception as e:
+            self.logger.warning(f"Could not load the MITRE ATT&CK data to pair the techniques of {rule_file} with their tactics - {e}")
+            return None
+        tactics = []
+        for name in mapping.get(technique, []):
+            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tactics:
+                tactics.append(MITRE_TACTICS[name])
+        return tactics or None
+
     def build_tactics(self, rule_content, rule_file=None):
         """Build the alertTemplate tactics from the rule's ATT&CK tags
 
-        Sigma tags tactics and techniques separately, without saying which
-        technique belongs to which tactic, so every tactic carries every
-        technique: nothing tagged is lost. Sub-techniques are grouped under
-        their technique.
+        Sigma tags tactics and techniques separately, while Graph refuses a
+        technique under a tactic it does not belong to. Each technique goes
+        under the tagged tactics it belongs to in ATT&CK, or under its own
+        tactics when the rule tags none of them. Sub-techniques are grouped
+        under their technique.
         """
-        tactics = []
+        tagged = []
         techniques = {}
         for tag in rule_content.get("tags") or []:
             tag = tag.lower().strip()
             if not tag.startswith("attack."):
                 continue
             name = tag[len("attack."):]
-            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tactics:
-                tactics.append(MITRE_TACTICS[name])
+            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tagged:
+                tagged.append(MITRE_TACTICS[name])
             match = re.fullmatch(r"(t[0-9]{4})(\.[0-9]{3})?", name)
             if match:
                 sub_techniques = techniques.setdefault(match.group(1).upper(), [])
                 if match.group(2) and name.upper() not in sub_techniques:
                     sub_techniques.append(name.upper())
-        if techniques and not tactics:
-            self.logger.warning(
-                f"Rule {rule_file} has ATT&CK techniques but no tactic tag, its techniques are not pushed"
-            )
-        return [
-            {
-                "tactic": tactic,
-                "techniques": [
+
+        tactics = {tactic: [] for tactic in tagged}
+        for technique, sub_techniques in techniques.items():
+            own_tactics = self._attack_tactics_of(technique, rule_file)
+            if own_tactics is None:
+                # Without ATT&CK, the tagged tactics are the best guess: a pair
+                # Graph refuses is dropped when pushing the rule
+                targets = tagged
+            else:
+                targets = [tactic for tactic in tagged if tactic in own_tactics] or own_tactics
+            if not targets:
+                self.logger.warning(f"Rule {rule_file} tags {technique} without any tactic, it is not pushed")
+            for tactic in targets:
+                tactics.setdefault(tactic, []).append(
                     {"technique": technique, "subTechniques": list(sub_techniques)}
-                    for technique, sub_techniques in techniques.items()
-                ],
-            }
-            for tactic in tactics
-        ]
+                )
+        return [{"tactic": tactic, "techniques": entries} for tactic, entries in tactics.items()]
+
+    @staticmethod
+    def _without_invalid_techniques(payload, error_message):
+        """Drop from a payload the technique and tactic pairs Graph named as
+        invalid, or return None when it named none"""
+        invalid = set(INVALID_TECHNIQUE_PATTERN.findall(error_message or ""))
+        if not invalid:
+            return None
+        payload = copy.deepcopy(payload)
+        for tactic in payload["detectionAction"]["alertTemplate"]["tactics"]:
+            tactic["techniques"] = [
+                technique
+                for technique in tactic["techniques"]
+                if (technique["technique"], tactic["tactic"]) not in invalid
+            ]
+        return payload
 
     def rule_differences(self, existing_rule, new_rule):
         """Name the settings where a deployed rule differs from the one droid deploys
@@ -794,16 +840,26 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 payload = {key: value for key, value in payload.items() if key != "status"}
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
-            else:
-                api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
-                response, status_code = self._patch(
-                    url=api_url, payload=payload, tenant_id=tenant_id
-                )
+            api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
+            send = self._patch
         else:
+            payload = alert_rule
             api_url = "/security/rules/detectionRules"
-            response, status_code = self._post(
-                url=api_url, payload=alert_rule, tenant_id=tenant_id
-            )
+            send = self._post
+
+        response, status_code = send(url=api_url, payload=payload, tenant_id=tenant_id)
+
+        if status_code == 400:
+            # Microsoft validates techniques against an ATT&CK older than the
+            # one droid pairs them with: rather than not deploying the rule,
+            # deploy it without the pairs Graph refuses
+            retry_payload = self._without_invalid_techniques(payload, get_error_message(response))
+            if retry_payload is not None:
+                self.logger.warning(
+                    f"Microsoft XDR refused ATT&CK techniques of {rule_file}, deploying it without them: {get_error_message(response)}",
+                    extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
+                )
+                response, status_code = send(url=api_url, payload=retry_payload, tenant_id=tenant_id)
 
         if status_code in (200, 201, 204):
             if isinstance(response, dict) and "error" in response:

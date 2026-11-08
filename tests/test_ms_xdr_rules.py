@@ -39,6 +39,25 @@ def build_rule_content(custom=None, tags=None, level="high"):
     return rule_content
 
 
+# The technique to tactics mapping of ATT&CK v20, where Defense Evasion is
+# split into stealth and defense-impairment
+ATTACK_MAPPING = {
+    "T1053": ["execution", "persistence", "privilege-escalation"],
+    "T1059": ["execution"],
+    "T1078": ["stealth", "persistence", "privilege-escalation", "initial-access"],
+    "T1204": ["execution"],
+    "T1562": ["defense-impairment"],
+}
+
+
+@pytest.fixture(autouse=True)
+def attack_mapping(monkeypatch):
+    """ATT&CK data without downloading it from MITRE"""
+    from sigma.data import mitre_attack
+
+    monkeypatch.setattr(mitre_attack, "mitre_attack_techniques_tactics_mapping", ATTACK_MAPPING, raising=False)
+
+
 @pytest.fixture
 def platform():
     return MicrosoftXDRPlatform(dict(XDR_PARAMETERS), LOGGER_PARAM)
@@ -244,10 +263,12 @@ def test_tags_are_pushed_as_tactics(platform, pushed):
     assert "category" not in template and "mitreTechniques" not in template
 
 
-def test_every_tactic_carries_every_technique(platform, pushed):
-    """Sigma does not say which technique belongs to which tactic: none is dropped."""
+def test_a_technique_goes_under_the_tagged_tactics_it_belongs_to(platform, pushed):
+    """Graph refuses a technique under a tactic it does not belong to"""
 
-    rule_content = build_rule_content(tags=["attack.persistence", "attack.privilege-escalation", "attack.t1053.005"])
+    rule_content = build_rule_content(
+        tags=["attack.persistence", "attack.privilege-escalation", "attack.command-and-control", "attack.t1053.005"]
+    )
 
     platform.create_rule(rule_content, "DeviceEvents", RULE_FILE)
 
@@ -255,6 +276,45 @@ def test_every_tactic_carries_every_technique(platform, pushed):
     assert alert_template(pushed[0])["tactics"] == [
         {"tactic": "Persistence", "techniques": techniques},
         {"tactic": "PrivilegeEscalation", "techniques": techniques},
+        {"tactic": "CommandAndControl", "techniques": []},
+    ]
+
+
+def test_a_technique_of_no_tagged_tactic_goes_under_its_own(platform, pushed):
+    rule_content = build_rule_content(tags=["attack.initial-access", "attack.t1059.001"])
+
+    platform.create_rule(rule_content, "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["tactics"] == [
+        {"tactic": "InitialAccess", "techniques": []},
+        {"tactic": "Execution", "techniques": [{"technique": "T1059", "subTechniques": ["T1059.001"]}]},
+    ]
+
+
+@pytest.mark.parametrize("technique", ["t1078", "t1562"])
+def test_defense_evasion_matches_the_tactics_attack_split_it_into(platform, pushed, technique):
+    """ATT&CK v18 split Defense Evasion into Stealth and Defense Impairment,
+    which Sigma tags and Microsoft still call Defense Evasion"""
+
+    platform.create_rule(build_rule_content(tags=["attack.defense-evasion", f"attack.{technique}"]), "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["tactics"] == [
+        {"tactic": "DefenseEvasion", "techniques": [{"technique": technique.upper(), "subTechniques": []}]}
+    ]
+
+
+def test_without_attack_data_techniques_go_under_the_tagged_tactics(platform, pushed, monkeypatch):
+    """ATT&CK is downloaded: offline, Graph refusing a pair is dealt with on push"""
+
+    def unavailable(technique, rule_file):
+        return None
+
+    monkeypatch.setattr(platform, "_attack_tactics_of", unavailable)
+
+    platform.create_rule(build_rule_content(tags=["attack.initial-access", "attack.t1059"]), "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["tactics"] == [
+        {"tactic": "InitialAccess", "techniques": [{"technique": "T1059", "subTechniques": []}]}
     ]
 
 
@@ -550,6 +610,52 @@ def test_disabling_an_auto_disabled_rule_is_pushed(platform, build_payload, grap
     push(platform, payload)
 
     assert graph["patch"][0]["status"] == "disabled"
+
+
+def test_techniques_graph_refuses_are_dropped_and_the_rule_deployed(platform, build_payload, monkeypatch):
+    """Microsoft validates against an older ATT&CK than droid's: the rule is
+    deployed without the pairs it refuses rather than not at all."""
+
+    payload = build_payload(build_rule_content(tags=["attack.initial-access", "attack.t1078", "attack.t1059"]))
+    monkeypatch.setattr("droid.platforms.ms_xdr.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(platform, "get_rule", lambda rule_id, tenant_id=None: None)
+    sent = []
+    refusal = {
+        "error": {
+            "code": "BadRequest",
+            "message": "MITRE properties are invalid: Technique 'T1078' is not a valid parent technique under tactic 'InitialAccess'.",
+        }
+    }
+
+    def fake_post(url=None, payload=None, tenant_id=None):
+        sent.append(copy.deepcopy(payload))
+        return (refusal, 400) if len(sent) == 1 else ({}, 201)
+
+    monkeypatch.setattr(platform, "_post", fake_post)
+
+    push(platform, payload)
+
+    assert len(sent) == 2
+    assert sent[1]["detectionAction"]["alertTemplate"]["tactics"] == [
+        {"tactic": "InitialAccess", "techniques": []},
+        {"tactic": "Execution", "techniques": [{"technique": "T1059", "subTechniques": []}]},
+    ]
+
+
+def test_another_bad_request_is_not_retried(platform, build_payload, monkeypatch):
+    payload = build_payload()
+    monkeypatch.setattr(platform, "get_rule", lambda rule_id, tenant_id=None: None)
+    sent = []
+
+    def fake_post(url=None, payload=None, tenant_id=None):
+        sent.append(payload)
+        return {"error": {"code": "BadRequest", "message": "Invalid query"}}, 400
+
+    monkeypatch.setattr(platform, "_post", fake_post)
+
+    with pytest.raises(Exception):
+        push(platform, payload)
+    assert len(sent) == 1
 
 
 def test_a_new_rule_is_created_with_the_sigma_id(platform, build_payload, graph):

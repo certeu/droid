@@ -56,6 +56,10 @@ class FakeXDRPlatform(MicrosoftXDRPlatform):
     def get_export_list_mssp(self):
         return self._export_list
 
+    def _attack_tactics_of(self, technique, rule_file):
+        # ATT&CK data without downloading it from MITRE
+        return {"T1059": ["Execution"]}.get(technique)
+
 
 def build_xdr_rule(query="the deployed query", description="A rule", status="enabled", rule_content=None):
     """The rule as Graph returns it once export deployed it"""
