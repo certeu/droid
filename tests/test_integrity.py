@@ -74,16 +74,6 @@ class FakeSentinelPlatform:
         return self._saved_search
 
 
-class FakeElasticPlatform:
-    """Minimal stand-in for ElasticPlatform"""
-
-    def __init__(self, saved_search=None):
-        self._saved_search = saved_search
-
-    def get_rule(self, rule_id):
-        return self._saved_search
-
-
 def build_splunk_rule(search="the deployed query", description="A rule", disabled="0"):
     return {"search": search, "description": description, "disabled": disabled}
 
@@ -92,10 +82,6 @@ def build_sentinel_rule(query="the deployed query", description="A rule", enable
     return SimpleNamespace(
         name=RULE_ID, description=description, query=query, enabled=enabled
     )
-
-
-def build_elastic_rule(query="the deployed query", description="A rule", enabled=True):
-    return {"name": RULE_ID, "description": description, "query": query, "enabled": enabled}
 
 
 def run_integrity(platform, rule_content, rule_converted, mssp=False, platform_name="microsoft_xdr"):
@@ -287,69 +273,138 @@ def test_sentinel_rule_matching_the_platform():
     assert not error
 
 
-def test_elastic_removed_rule_still_on_the_platform():
-    """A removed rule still deployed on Elastic is still an integrity error"""
-    platform = FakeElasticPlatform(build_elastic_rule(query="a stale query"))
-    error = run_integrity(
-        platform, build_rule_content(removed=True), "the new query",
-        platform_name="esql"
-    )
-    assert error
+ELASTIC_PARAMETERS = {
+    "kibana_url": "https://kibana.planet-express.local",
+    "elastic_hosts": ["https://elastic.planet-express.local"],
+    "elastic_tls_verify": True,
+    "auth_method": "basic",
+    "schedule_interval": 5,
+    "schedule_interval_unit": "m",
+    "actions": {"alerts_index": {"type": "index", "connector_id": "planet-express-alerts"}},
+}
+
+ELASTIC_QUERY = "FROM logs-* METADATA _id, _index, _version | WHERE true"
 
 
-def test_elastic_removed_rule_absent_from_the_platform():
-    """A removed rule already deleted from Elastic is not an integrity error"""
-    platform = FakeElasticPlatform(None)
-    error = run_integrity(
-        platform, build_rule_content(removed=True), "the new query",
-        platform_name="esql"
+def build_elastic_rule_content(**custom):
+    rule_content = {
+        **build_rule_content(),
+        "level": "high",
+        "author": "Hermes Conrad",
+        "tags": ["attack.t1078", "planet-express"],
+    }
+    if custom:
+        rule_content["custom"] = custom
+    return rule_content
+
+
+def elastic_platform(deployed):
+    """A real Elastic platform reading `deployed` as the rule on Kibana"""
+    from droid.platforms.elastic import ElasticPlatform
+
+    platform = ElasticPlatform(dict(ELASTIC_PARAMETERS), LOGGER_PARAM, "esql")
+    platform.get_rule = lambda rule_id: deployed
+    return platform
+
+
+def deployed_as_exported(rule_content=None, query=ELASTIC_QUERY, **changes):
+    """The rule export deployed, as Kibana returns it, with changes made since"""
+    platform = elastic_platform(None)
+    rule = platform.build_rule(rule_content or build_elastic_rule_content(), query, "a_rule.yml")
+    rule["actions"] = [{**action, "uuid": "kibana-gives-each-action-one"} for action in rule["actions"]]
+    rule["revision"] = 3
+    return {**rule, **changes}
+
+
+def run_elastic_integrity(deployed, rule_content=None, query=ELASTIC_QUERY):
+    return run_integrity(
+        elastic_platform(deployed), rule_content or build_elastic_rule_content(), query, platform_name="esql"
     )
-    assert not error
 
 
 def test_elastic_rule_matching_the_platform():
     """A rule matching Elastic is not an integrity error"""
-    platform = FakeElasticPlatform(build_elastic_rule(query="the new query"))
-    error = run_integrity(
-        platform, build_rule_content(), "the new query", platform_name="esql"
-    )
-    assert not error
+    assert not run_elastic_integrity(deployed_as_exported())
+
+
+def test_elastic_removed_rule_still_on_the_platform():
+    """A removed rule still deployed on Elastic is still an integrity error"""
+    assert run_elastic_integrity(deployed_as_exported(), build_elastic_rule_content(removed=True))
+
+
+def test_elastic_removed_rule_absent_from_the_platform():
+    """A removed rule already deleted from Elastic is not an integrity error"""
+    assert not run_elastic_integrity(None, build_elastic_rule_content(removed=True))
+
+
+def test_elastic_rule_absent_from_the_platform():
+    assert run_elastic_integrity(None)
+
+
+def test_elastic_rule_kibana_cannot_show_is_an_error():
+    """Integrity that cannot read the rule has checked nothing"""
+    platform = elastic_platform(None)
+
+    def refused(rule_id):
+        raise Exception('{"message": "Unauthorized to get a siem.esqlRule rule"}')
+
+    platform.get_rule = refused
+
+    assert run_integrity(platform, build_elastic_rule_content(), ELASTIC_QUERY, platform_name="esql")
 
 
 def test_elastic_rule_disabled_but_enabled_on_the_platform():
     """A rule marked disabled must not be running on Elastic"""
-    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=True))
-    rule_content = {**build_rule_content(), "custom": {"disabled": True}}
-    error = run_integrity(platform, rule_content, "the new query", platform_name="esql")
-    assert error
+    assert run_elastic_integrity(deployed_as_exported(enabled=True), build_elastic_rule_content(disabled=True))
 
 
 def test_elastic_rule_disabled_on_the_platform():
     """A rule not marked disabled must be running on Elastic"""
-    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=False))
-    error = run_integrity(platform, build_rule_content(), "the new query", platform_name="esql")
-    assert error
+    assert run_elastic_integrity(deployed_as_exported(enabled=False))
 
 
 def test_elastic_rule_disabled_as_expected():
-    platform = FakeElasticPlatform(build_elastic_rule(query="the new query", enabled=False))
-    rule_content = {**build_rule_content(), "custom": {"disabled": True}}
-    error = run_integrity(platform, rule_content, "the new query", platform_name="esql")
-    assert not error
+    rule_content = build_elastic_rule_content(disabled=True)
+
+    assert not run_elastic_integrity(deployed_as_exported(rule_content), rule_content)
 
 
 @pytest.mark.parametrize(
-    "deployed",
+    "field, value",
     [
-        "FROM logs-* METADATA _id, _index, _version | WHERE true",
-        "FROM logs-*  METADATA _id, _index, _version | WHERE true",
-        "FROM logs-* [METADATA _id, _index, _version] | WHERE true",
+        ("query", "FROM logs-* METADATA _id, _index, _version | WHERE false"),
+        ("description", "Changed in Kibana"),
+        ("name", "Renamed in Kibana"),
+        ("severity", "critical"),
+        ("risk_score", 99),
+        ("interval", "1h"),
+        ("from", "now-1m"),
+        ("tags", ["tampered"]),
+        ("threat", []),
+        ("actions", []),
+        ("max_signals", 1000),
+        ("alert_suppression", {"group_by": ["host.name"], "missing_fields_strategy": "suppress"}),
+        ("building_block_type", "default"),
     ],
 )
-def test_elastic_metadata_added_on_export_is_not_a_difference(deployed):
+def test_elastic_rule_changed_on_the_platform(field, value):
+    """Anything export sets and Kibana now holds differently is drift"""
+    assert run_elastic_integrity(deployed_as_exported(**{field: value}))
+
+
+def test_elastic_eql_rule_reading_another_index():
+    from droid.platforms.elastic import ElasticPlatform
+
+    platform = ElasticPlatform(dict(ELASTIC_PARAMETERS), LOGGER_PARAM, "eql")
+    platform._index_name = ["logs-vault-*"]
+    deployed = platform.build_rule(build_elastic_rule_content(), "any where true", "a_rule.yml")
+    platform.get_rule = lambda rule_id: {**deployed, "index": ["tampered-*"]}
+
+    assert run_integrity(platform, build_elastic_rule_content(), "any where true", platform_name="eql")
+
+
+def test_elastic_metadata_added_on_export_is_not_a_difference():
     """Export adds the METADATA clause Elastic needs to deduplicate alerts"""
-    platform = FakeElasticPlatform(build_elastic_rule(query=deployed))
-    error = run_integrity(
-        platform, build_rule_content(), "FROM logs-* | WHERE true", platform_name="esql"
-    )
-    assert not error
+    converted = "FROM logs-* | WHERE true"
+
+    assert not run_elastic_integrity(deployed_as_exported(query=converted), query=converted)

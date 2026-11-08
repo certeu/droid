@@ -597,6 +597,15 @@ class ElasticPlatform(AbstractPlatform):
         raise Exception(response.text)
 
     def check_rule_changes(self, existing_rule, new_rule):
+        if self.rule_differences(existing_rule, new_rule):
+            self.logger.info(f"Rule '{new_rule['name']}' has changed")
+            return True
+        self.logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
+        return False
+
+    def rule_differences(self, existing_rule, new_rule):
+        """List the fields of a deployed rule that differ from the rule built"""
+
         fields = [
             "name",
             "description",
@@ -630,13 +639,11 @@ class ElasticPlatform(AbstractPlatform):
                 for action in existing_rule.get("actions") or []
             ],
         }
-        for field in fields:
-            # Kibana returns empty lists for optional list fields never set
-            if (existing_rule.get(field) or None) != (new_rule.get(field) or None):
-                self.logger.info(f"Rule '{new_rule['name']}' has changed")
-                return True
-        self.logger.info(f"Rule '{new_rule['name']}' already exists and is up to date")
-        return False
+        # Kibana returns empty lists for optional list fields never set
+        return [
+            field for field in fields
+            if (existing_rule.get(field) or None) != (new_rule.get(field) or None)
+        ]
 
     def kibana_import_rule(self, json_data, rule_content):
         existing_rule = self.get_rule(json_data["rule_id"])
@@ -793,9 +800,36 @@ class ElasticPlatform(AbstractPlatform):
         ]
 
     def create_rule(self, rule_content, rule_converted, rule_file):
-        """Create an analytic rule in Elastic
-        Create a scheduled alert rule in Elastic
-        """
+        """Create or update a scheduled alert rule in Elastic"""
+
+        json_data = self.build_rule(rule_content, rule_converted, rule_file)
+        if not json_data["enabled"]:
+            self.logger.info(f"Successfully disabled the rule {rule_file}")
+
+        try:
+            self.kibana_import_rule(json_data, rule_content)
+            self.logger.info(
+                f"Successfully exported the rule {rule_file}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                },
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Could not export the rule {rule_file} - error: {e}",
+                extra={
+                    "rule_file": rule_file,
+                    "rule_converted": rule_converted,
+                    "rule_content": rule_content,
+                    "error": e,
+                },
+            )
+            raise
+
+    def build_rule(self, rule_content, rule_converted, rule_file):
+        """Build the rule export sends to Kibana, which integrity expects to find"""
 
         rule_tags = rule_content.get("tags") or []
         threat = self.mitre_attack_threats([tag for tag in rule_tags if tag.startswith("attack.")])
@@ -825,11 +859,7 @@ class ElasticPlatform(AbstractPlatform):
             display_name = self._building_block_prefix + " - " + display_name
         # Handling the status of the alert
 
-        if rule_content.get("custom", {}).get("disabled") is True:
-            enabled = False
-            self.logger.info(f"Successfully disabled the rule {rule_file}")
-        else:
-            enabled = True
+        enabled = rule_content.get("custom", {}).get("disabled") is not True
 
         language = self._language
         if "custom" in rule_content and "raw_language" in rule_content["custom"]:
@@ -939,27 +969,7 @@ class ElasticPlatform(AbstractPlatform):
                     "missing_fields_strategy": "suppress",
                 }
 
-        try:
-            self.kibana_import_rule(json_data, rule_content)
-            self.logger.info(
-                f"Successfully exported the rule {rule_file}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                },
-            )
-        except Exception as e:
-            self.logger.error(
-                f"Could not export the rule {rule_file} - error: {e}",
-                extra={
-                    "rule_file": rule_file,
-                    "rule_converted": rule_converted,
-                    "rule_content": rule_content,
-                    "error": e,
-                },
-            )
-            raise
+        return json_data
 
     def run_eql_search(self, query, es_client=None, index=None, range_gte=None):
         response = es_client.eql.search(

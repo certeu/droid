@@ -3,7 +3,6 @@ Module handling the integrity check of the rules on the platforms.
 """
 from __future__ import annotations
 
-import re
 import yaml
 
 from pathlib import Path
@@ -338,70 +337,43 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         return error
 
 
-def strip_esql_metadata(query):
-    """Remove the METADATA clause of an ES|QL source command, bracketed or not"""
-    return re.sub(
-        r"\s*\[?\s*\bMETADATA\s+_id\s*,\s*_index\s*,\s*_version(?:\s*\])?",
-        "",
-        query,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-
 def integrity_rule_elastic(rule_converted, rule_content, platform: ElasticPlatform, rule_file, parameters, logger, error):
+    """Check the rule on Kibana is the one export would deploy
+
+    The rule export would build is compared field by field with the deployed
+    one, the same comparison export runs to decide on an update: anything
+    changed on Kibana since, or not yet exported, is reported.
+    """
     try:
         saved_search: dict = platform.get_rule(rule_content["id"])
     except Exception as e:
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
-        return error
+        return True
 
     error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
     if error is not None:
         return error
 
+    if rule_content.get("custom", {}).get("removed"):
+        logger.error(f"The rule {rule_file} is marked as removed but is still deployed")
+        return True
+
     logger.info(f"Successfully retrieved the rule {rule_file}")
 
-    # Export adds the METADATA clause Elastic needs to deduplicate alerts, so it
-    # is left out of both sides of the comparison
-    result = {
-        "name": saved_search["name"],
-        "description": saved_search["description"],
-        "query": strip_esql_metadata(saved_search["query"])
-    }
+    try:
+        expected = platform.build_rule(rule_content, rule_converted, rule_file)
+    except Exception as e:
+        logger.error(f"Couldn't build the rule {rule_file} to check its integrity - error {e}")
+        return True
 
-    rule_content["detection"] = strip_esql_metadata(rule_converted)
+    differences = platform.rule_differences(saved_search, expected)
+    for field in differences:
+        logger.error(f"{field} of the rule {rule_file} differs from the one deployed")
 
-    mapping = {
-        "detection": "query",
-        "description": "description"
-    }
-    for key in mapping:
-        rule_key = key
-        result_key = mapping[key]
+    if not differences:
+        logger.info(f"The rule {rule_file} matches the one deployed")
 
-        if rule_content.get(rule_key) == result.get(result_key):
-            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
-        else:
-            logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
-            error = True
-
-    # Check if disabled
-    is_disabled = rule_content.get("custom", {}).get("disabled") is True
-    is_enabled = saved_search.get("enabled", True)
-
-    if is_disabled and not is_enabled:
-        logger.info("The rule is disabled as expected")
-    elif is_disabled and is_enabled:
-        logger.error("The rule is not disabled on the platform")
-        error = True
-    elif not is_enabled:
-        logger.error("The rule is not enabled on the platform")
-        error = True
-    else:
-        logger.info("The rule is enabled as expected")
-
-    if error:
-        return error
+    return bool(differences)
 
 def integrity_rule(parameters, rule_converted, rule_content, platform, rule_file, error, logger_param):
 
