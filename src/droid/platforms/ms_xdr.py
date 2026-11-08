@@ -66,6 +66,36 @@ MITRE_TACTICS = {
     "impact": "Impact",
 }
 
+# custom.actions action names, the automatedActions collection each one fills,
+# and the identifiers it accepts
+AUTOMATED_ACTIONS = {
+    "forceUserPasswordReset": ("forceUserPasswordResets", ["accountSid", "initiatingProcessAccountSid"]),
+    "disableUser": ("disableUsers", ["accountSid", "initiatingProcessAccountSid"]),
+    "markUserAsCompromised": ("markUsersAsCompromised", ["accountObjectId", "initiatingProcessAccountObjectId"]),
+    "stopAndQuarantineFile": ("stopAndQuarantineFiles", ["sha1", "initiatingProcessSHA1"]),
+    "blockFile": ("blockFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
+    "allowFile": ("allowFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
+    "restrictAppExecution": ("restrictAppExecutions", ["deviceId"]),
+    "initiateInvestigation": ("initiateInvestigations", ["deviceId"]),
+    "runAntivirusScan": ("runAntivirusScans", ["deviceId"]),
+    "collectInvestigationPackage": ("collectInvestigationPackages", ["deviceId"]),
+    "isolateDevice": ("isolateDevices", ["deviceId"]),
+}
+
+# The identifiers of the removed responseActions, and the automated action
+# property and advanced hunting column each of them stands for
+IDENTIFIER_COLUMNS = {
+    "deviceId": ("deviceIdColumn", "DeviceId"),
+    "accountSid": ("accountSidColumn", "AccountSid"),
+    "initiatingProcessAccountSid": ("accountSidColumn", "InitiatingProcessAccountSid"),
+    "accountObjectId": ("accountObjectIdColumn", "AccountObjectId"),
+    "initiatingProcessAccountObjectId": ("accountObjectIdColumn", "InitiatingProcessAccountObjectId"),
+    "sha1": ("sha1Column", "SHA1"),
+    "initiatingProcessSHA1": ("sha1Column", "InitiatingProcessSHA1"),
+    "sha256": ("sha256Column", "SHA256"),
+    "initiatingProcessSHA256": ("sha256Column", "InitiatingProcessSHA256"),
+}
+
 # query_period values droid accepts, the ones of the schedule.period Microsoft
 # removed, and the schedule.frequency replacing each of them
 QUERY_PERIOD_FREQUENCIES = {
@@ -97,6 +127,24 @@ def _tactic_triples(tactics):
             for sub_technique in technique.get("subTechniques") or [None]:
                 triples.add((tactic.get("tactic"), technique.get("technique"), sub_technique))
     return triples
+
+
+def _automated_action_set(automated_actions):
+    """Reduce automatedActions to its non-empty actions, ignoring order and the
+    empty collections and @odata annotations Graph returns"""
+    reduced = {}
+    for collection, entries in (automated_actions or {}).items():
+        if collection.startswith("@odata") or not entries:
+            continue
+        reduced[collection] = sorted(
+            tuple(sorted(
+                (key, tuple(value) if isinstance(value, list) else value)
+                for key, value in entry.items()
+                if not key.startswith("@odata") and value not in (None, "", [])
+            ))
+            for entry in entries
+        )
+    return reduced
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -456,7 +504,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "tactics": tactics,
                     },
                     "organizationalScope": None,  # TODO: Find out what this does
-                    "responseActions": [],  # TODO: Define Actions in custom rule fields
+                    "automatedActions": self.parse_actions([], rule_file=rule_file),
                 },
             }
         except Exception as e:
@@ -482,10 +530,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         if "custom" in rule_content:
             if "actions" in rule_content["custom"]:
-                responseActions = self.parse_actions(
+                alert_rule["detectionAction"]["automatedActions"] = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file
                 )
-                alert_rule["detectionAction"]["responseActions"] = responseActions
             if "impactedAssets" in rule_content["custom"]:
                 self.logger.warning(
                     f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.xdr_entity_mappings - {rule_file}"
@@ -664,9 +711,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             _tactic_triples(existing_template.get("tactics")),
             _tactic_triples(new_template["tactics"]),
         )
-        compared["responseActions"] = (
-            (existing_rule.get("detectionAction") or {}).get("responseActions"),
-            new_rule["detectionAction"].get("responseActions"),
+        compared["automatedActions"] = (
+            _automated_action_set((existing_rule.get("detectionAction") or {}).get("automatedActions")),
+            _automated_action_set(new_rule["detectionAction"]["automatedActions"]),
         )
 
         # entityMappings is only part of the payload when the rule defines
@@ -774,123 +821,73 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         )
         raise Exception(f"Could not export the rule {rule_file} {reason}")
 
-    def parse_actions(self, actions, rule_file=None):
-        # TODO: It might be better to have a schema validation for the actions
-        response_actions = []
-        for action in actions:
-            response_action = {}
-            if "action" in action:
-                action_name = action["action"]
-                if not action_name in [
-                    "forceUserPasswordReset",
-                    "disableUser",
-                    "markUserAsCompromised",
-                    "stopAndQuarantineFile",
-                    "restrictAppExecution",
-                    "initiateInvestigation",
-                    "runAntivirusScan",
-                    "collectInvestigationPackage",
-                    "isolateDevice",
-                    "blockFile",
-                    "allowFile",
-                ]:
-                    self.logger.warning(
-                        f"Only these actiontypes are allowed: forceUserPasswordReset, disableUser, markUserAsCompromised, stopAndQuarantineFile, restrictAppExecution, initiateInvestigation, runAntivirusScan, collectInvestigationPackage, isolateDevice, blockFile, allowFile. {rule_file}"
-                    )
-                    continue
-                response_action["@odata.type"] = (
-                    f"#microsoft.graph.security.{action_name}ResponseAction"
-                )
-                # Isolate Device needs the field isolationType
-                if action_name == "isolateDeviceResponseAction":
-                    if "isolationType" in action:
-                        response_action["isolationType"] = action["isolationType"]
-                    else:
-                        self.logger.error(
-                            f"Isolation Type ('selective' or 'full') is missing from the rule {rule_file}"
-                        )
-                        raise
-                # Block File needs the field deviceGroupNames but it can easily be an empty list
-                if action_name == "blockFileResponseAction":
-                    if "deviceGroupNames" in action:
-                        if isinstance(action["deviceGroupNames"], str):
-                            response_action["deviceGroupNames"] = [
-                                action["deviceGroupNames"]
-                            ]
-                        elif isinstance(action["deviceGroupNames"], list):
-                            response_action["deviceGroupNames"] = action[
-                                "deviceGroupNames"
-                            ]
-                        elif action["deviceGroupNames"] is None:
-                            response_action["deviceGroupNames"] = []
-                        else:
-                            response_action["deviceGroupNames"] = []
-                # These actions all have an identifier invisible in the GUI.
-                # So we add it automatically, it's still possible to overwrite though
-                if action_name in [
-                    "restrictAppExecution",
-                    "initiateInvestigation",
-                    "runAntivirusScan",
-                    "collectInvestigationPackage",
-                    "isolateDevice",
-                ]:
-                    response_action["identifier"] = "deviceId"
-            else:
-                self.logger.error(f"Action Name is missing from the rule {rule_file}")
-                raise
-            if "identifier" in action:
-                if isinstance(action["identifier"], list):
-                    identifier = ",".join(action["identifier"])
-                else:
-                    identifier = action["identifier"]
-                # Define a mapping of action names to valid identifiers
-                valid_identifiers = {
-                    "forceUserPasswordReset": [
-                        "accountSid",
-                        "initiatingProcessAccountSid",
-                    ],
-                    "initiatingProcessAccountSid": [
-                        "accountSid",
-                        "initiatingProcessAccountSid",
-                    ],
-                    "markUserAsCompromised": [
-                        "accountObjectId",
-                        "initiatingProcessAccountObjectId",
-                    ],
-                    "stopAndQuarantineFile": ["sha1", "initiatingProcessSHA1"],
-                    "blockFile": [
-                        "sha256",
-                        "sha1",
-                        "initiatingProcessSHA1",
-                        "initiatingProcessSHA256",
-                    ],
-                    "allowFile": [
-                        "sha256",
-                        "sha1",
-                        "initiatingProcessSHA1",
-                        "initiatingProcessSHA256",
-                    ],
-                }
-                # Check if the action_name is in the valid_identifiers dictionary
-                if action_name in valid_identifiers:
-                    if identifier not in valid_identifiers[action_name]:
-                        self.logger.error(
-                            f"Identifier for {action_name} must be one of {valid_identifiers[action_name]} - {rule_file}"
-                        )
-                        raise
-                # And of course there is an exeption
-                # stopAndQuarantineFile needs deviceId as always, but in a comma separated list
-                if action_name == "stopAndQuarantineFile":
-                    identifier += ",deviceId"
-                response_action["identifier"] = identifier
-            if not "identifier" in response_action:
-                self.logger.error(
-                    f"Action Identifier is missing from the rule {rule_file}"
-                )
-                raise
+    def _action_error(self, message, rule_file):
+        message = f"{message} - {rule_file}"
+        self.logger.error(message)
+        return ValueError(message)
 
-            response_actions.append(response_action)
-        return response_actions
+    def parse_actions(self, actions, rule_file=None):
+        """Build the detectionAction automatedActions payload from custom.actions
+
+        Rules keep the custom.actions of the removed responseActions: an action
+        name and the identifier of what it acts on. Graph now takes the query
+        column holding that identifier, so each identifier becomes its column.
+        Every collection droid manages is sent, empty when unused, so that an
+        action removed from a rule is removed from the platform too.
+        """
+        # TODO: It might be better to have a schema validation for the actions
+        automated_actions = {collection: [] for collection, _ in AUTOMATED_ACTIONS.values()}
+        for action in actions or []:
+            action_name = action.get("action")
+            if not action_name:
+                raise self._action_error("Action Name is missing from the rule", rule_file)
+            if action_name not in AUTOMATED_ACTIONS:
+                self.logger.warning(
+                    f"Only these actiontypes are allowed: {', '.join(AUTOMATED_ACTIONS)}. {rule_file}"
+                )
+                continue
+            collection, valid_identifiers = AUTOMATED_ACTIONS[action_name]
+
+            identifiers = action.get("identifier")
+            if identifiers is None and valid_identifiers == ["deviceId"]:
+                # Device actions always act on the device, which the GUI never asks for
+                identifiers = "deviceId"
+            if not identifiers:
+                raise self._action_error(f"Action Identifier is missing from the rule for {action_name}", rule_file)
+            if isinstance(identifiers, str):
+                identifiers = identifiers.split(",")
+
+            automated_action = {}
+            for identifier in identifiers:
+                identifier = identifier.strip()
+                if identifier not in valid_identifiers:
+                    raise self._action_error(
+                        f"Identifier for {action_name} must be one of {valid_identifiers}", rule_file
+                    )
+                column_property, column = IDENTIFIER_COLUMNS[identifier]
+                if column_property in automated_action:
+                    raise self._action_error(
+                        f"Identifiers for {action_name} give {column_property} twice", rule_file
+                    )
+                automated_action[column_property] = column
+
+            if action_name == "stopAndQuarantineFile":
+                # The file is stopped on the device it was seen on
+                automated_action["deviceIdColumn"] = IDENTIFIER_COLUMNS["deviceId"][1]
+            if action_name == "isolateDevice":
+                if action.get("isolationType") not in ("full", "selective"):
+                    raise self._action_error(
+                        "Isolation Type ('selective' or 'full') is missing from the rule", rule_file
+                    )
+                automated_action["isolationType"] = action["isolationType"]
+            if action_name in ("blockFile", "allowFile") and "deviceGroupNames" in action:
+                device_group_names = action["deviceGroupNames"]
+                if isinstance(device_group_names, str):
+                    device_group_names = [device_group_names]
+                automated_action["deviceGroupNames"] = device_group_names if isinstance(device_group_names, list) else []
+
+            automated_actions[collection].append(automated_action)
+        return automated_actions
 
     # Valid column identifiers per entity category, from the Graph
     # entityMappingConfiguration complex type.

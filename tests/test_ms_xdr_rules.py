@@ -228,6 +228,70 @@ def test_a_rule_without_attack_tags_has_no_tactics(platform, pushed):
     assert alert_template(pushed[0])["tactics"] == []
 
 
+
+# Automated actions
+
+
+def automated_actions(payload):
+    """The non-empty collections of the automatedActions pushed"""
+    return {collection: entries for collection, entries in payload["detectionAction"]["automatedActions"].items() if entries}
+
+
+def test_actions_are_pushed_as_automated_actions(platform, pushed):
+    custom = {
+        "actions": [
+            {"action": "isolateDevice", "isolationType": "selective"},
+            {"action": "disableUser", "identifier": "initiatingProcessAccountSid"},
+            {"action": "stopAndQuarantineFile", "identifier": "sha1"},
+            {"action": "blockFile", "identifier": ["sha1", "sha256"], "deviceGroupNames": "Hermes desks"},
+        ]
+    }
+
+    platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
+
+    assert "responseActions" not in pushed[0]["detectionAction"]
+    assert automated_actions(pushed[0]) == {
+        "isolateDevices": [{"deviceIdColumn": "DeviceId", "isolationType": "selective"}],
+        "disableUsers": [{"accountSidColumn": "InitiatingProcessAccountSid"}],
+        "stopAndQuarantineFiles": [{"sha1Column": "SHA1", "deviceIdColumn": "DeviceId"}],
+        "blockFiles": [{"sha1Column": "SHA1", "sha256Column": "SHA256", "deviceGroupNames": ["Hermes desks"]}],
+    }
+
+
+def test_a_rule_without_actions_clears_them(platform, pushed):
+    """Every collection is sent, so an action dropped from a rule is dropped
+    from the platform rather than left running."""
+
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+
+    actions = pushed[0]["detectionAction"]["automatedActions"]
+    assert actions["isolateDevices"] == [] and automated_actions(pushed[0]) == {}
+
+
+def test_an_unknown_action_is_skipped(platform, pushed):
+    custom = {"actions": [{"action": "launchNibbler"}, {"action": "runAntivirusScan"}]}
+
+    platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
+
+    assert automated_actions(pushed[0]) == {"runAntivirusScans": [{"deviceIdColumn": "DeviceId"}]}
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"identifier": "accountSid"},
+        {"action": "disableUser"},
+        {"action": "disableUser", "identifier": "accountObjectId"},
+        {"action": "isolateDevice"},
+        {"action": "blockFile", "identifier": ["sha1", "initiatingProcessSHA1"]},
+    ],
+    ids=["no-action-name", "no-identifier", "wrong-identifier", "no-isolation-type", "same-column-twice"],
+)
+def test_an_invalid_action_is_an_error(platform, action):
+    with pytest.raises(ValueError):
+        platform.parse_actions([action], rule_file=RULE_FILE)
+
+
 # Change detection
 
 
@@ -286,6 +350,25 @@ def test_a_changed_technique_is_detected(platform, build_payload):
     deployed["detectionAction"]["alertTemplate"]["tactics"][0]["techniques"] = [{"technique": "T1204"}]
 
     assert platform.rule_differences(deployed, payload) == ["tactics"]
+
+
+def test_automated_actions_as_graph_returns_them_are_unchanged(platform, build_payload):
+    payload = build_payload(build_rule_content({"actions": [{"action": "isolateDevice", "isolationType": "full"}]}))
+    deployed = deployed_rule(payload)
+    actions = deployed["detectionAction"]["automatedActions"]
+    actions["@odata.type"] = "#microsoft.graph.security.automatedActionSet"
+    actions["hardDeleteEmails"] = []
+    actions["isolateDevices"][0]["@odata.type"] = "#microsoft.graph.security.isolateDeviceAction"
+
+    assert platform.rule_differences(deployed, payload) == []
+
+
+def test_a_changed_action_is_detected(platform, build_payload):
+    payload = build_payload(build_rule_content({"actions": [{"action": "isolateDevice", "isolationType": "full"}]}))
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["automatedActions"]["isolateDevices"][0]["isolationType"] = "selective"
+
+    assert platform.rule_differences(deployed, payload) == ["automatedActions"]
 
 
 @pytest.mark.parametrize(
