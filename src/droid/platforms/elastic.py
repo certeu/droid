@@ -173,6 +173,19 @@ def parse_suppression(spec, where):
     return suppression
 
 
+def parse_duration(value, where, setting):
+    """Validate a Kibana duration such as 90s, 5m, 1h or 1d, return it with its seconds"""
+
+    match = re.fullmatch(r"(\d+)([smhd])", str(value))
+    if not match or int(match.group(1)) == 0:
+        raise ValueError(f"{where}: invalid {setting} '{value}', e.g. 90s, 5m, 1h or 1d")
+
+    return str(value), int(match.group(1)) * TIME_UNIT_SECONDS[match.group(2)]
+
+
+SPACE_ID = re.compile(r"[a-z0-9_-]+")
+
+
 def parse_max_signals(value, where):
     """Validate the maximum number of alerts a rule run creates"""
 
@@ -341,10 +354,20 @@ class ElasticPlatform(AbstractPlatform):
 
         self._eql_search_range_gte = self._parameters["eql_search_range_gte"]
         self._esql_search_range_gte = self._parameters["esql_search_range_gte"]
+        # Searches run up to now unless told to end earlier
+        self._eql_search_range_lte = self._parameters.get("eql_search_range_lte")
+        self._esql_search_range_lte = self._parameters.get("esql_search_range_lte")
         self._schedule_interval = self._parameters["schedule_interval"]
         self._schedule_interval_unit = self._parameters["schedule_interval_unit"]
         self._license = self._parameters["license"]
         self._kibana_url = self._parameters["kibana_url"]
+        # Rules, and the connectors their actions run, live in a Kibana space
+        self._space = self._parameters.get("space")
+        if self._space is not None and not SPACE_ID.fullmatch(str(self._space)):
+            raise ValueError(
+                f"ElasticPlatform: invalid space '{self._space}', a space ID holds lowercase letters, digits, _ and -"
+            )
+        self._kibana_api = self._kibana_url.rstrip("/") + (f"/s/{self._space}" if self._space else "")
         self._elastic_hosts = self._parameters["elastic_hosts"]
         self._kibana_ca = self._parameters["kibana_ca"]
         self._tls_verify = self._parameters["tls_verify"]
@@ -361,20 +384,24 @@ class ElasticPlatform(AbstractPlatform):
             time_to_seconds(self._additional_look_back) if self._additional_look_back else 0
         )
 
-        self._actions = {
-            name: self.build_action(name, action)
-            for name, action in (self._parameters.get("actions") or {}).items()
-        }
+        self._action_configs = dict(self._parameters.get("actions") or {})
+        self._actions = {name: self.build_action(name, action) for name, action in self._action_configs.items()}
 
         # Alert suppression needs a Platinum license
         self._suppress_correlation_alerts = self._parameters.get("suppress_correlation_alerts", True)
         self._suppression = None
         if "suppression" in self._parameters:
             self._suppression = parse_suppression(self._parameters["suppression"], "ElasticPlatform")
-        # Fail before any export on a pipeline group suppression that Kibana would refuse
+        # Fail before any export on a pipeline group setting that Kibana would refuse
         for group, group_config in (self._parameters.get("pipelines") or {}).items():
-            if isinstance(group_config, dict) and "suppression" in group_config:
-                parse_suppression(group_config["suppression"], f"ElasticPlatform: pipeline group '{group}'")
+            if not isinstance(group_config, dict):
+                continue
+            where = f"ElasticPlatform: pipeline group '{group}'"
+            if "suppression" in group_config:
+                parse_suppression(group_config["suppression"], where)
+            for setting in ("interval", "additional_look_back"):
+                if setting in group_config:
+                    parse_duration(group_config[setting], where, setting)
 
         self._max_signals = parse_max_signals(self._parameters.get("max_signals", 100), "ElasticPlatform")
 
@@ -549,7 +576,7 @@ class ElasticPlatform(AbstractPlatform):
             auth = HTTPBasicAuth(self._username, self._password)
 
         return getattr(requests, method)(
-            self._kibana_url + "/api/detection_engine/rules",
+            self._kibana_api + "/api/detection_engine/rules",
             headers=headers,
             verify=self._tls_verified,
             auth=auth,
@@ -751,7 +778,11 @@ class ElasticPlatform(AbstractPlatform):
         }
 
     def rule_actions(self, rule_content):
-        """Return the actions of a rule, all of them unless it selects some"""
+        """Return the actions of a rule, all of them unless it selects some
+
+        `elastic_actions` lists the names of the actions, or maps them to the
+        parameters the rule overrides, e.g. other recipients for one rule.
+        """
 
         selected = rule_content.get("custom", {}).get("elastic_actions")
         if selected is None:
@@ -761,7 +792,26 @@ class ElasticPlatform(AbstractPlatform):
         if unknown:
             raise ValueError(f"Unknown Elastic actions {', '.join(unknown)} in custom.elastic_actions")
 
-        return [self._actions[name] for name in selected]
+        if not isinstance(selected, dict):
+            return [self._actions[name] for name in selected]
+
+        actions = []
+        for name, override in selected.items():
+            if not override:
+                actions.append(self._actions[name])
+                continue
+            if not isinstance(override, dict):
+                raise ValueError(f"custom.elastic_actions: the override of '{name}' must be a mapping of parameters")
+            if "type" in override or "connector_id" in override:
+                raise ValueError(
+                    f"custom.elastic_actions: the override of '{name}' cannot change its type or connector_id"
+                )
+            config = {**self._action_configs[name], **override}
+            # A throttle cleared by the rule is no throttle at all
+            if config.get("throttle", 0) is None:
+                del config["throttle"]
+            actions.append(self.build_action(name, config))
+        return actions
 
     def rule_suppression(self, rule_content, rule_file):
         """Resolve the alert suppression a rule asks for
@@ -784,6 +834,41 @@ class ElasticPlatform(AbstractPlatform):
             return parse_suppression(group_config["suppression"], f"Rule {rule_file}")
 
         return dict(self._suppression) if self._suppression else None
+
+    def rule_schedule(self, rule_content, rule_file):
+        """Resolve the interval and additional look-back of a rule
+
+        The rule's own `elastic_interval` and `elastic_additional_look_back`
+        win, then the `interval` and `additional_look_back` of its pipeline
+        group, then the platform ones.
+
+        Return: (interval, interval seconds, additional look-back or None, its seconds)
+        """
+
+        custom = rule_content.get("custom", {})
+        group_config = rule_content.get("_droid_variant", {}).get("config", {})
+        where = f"Rule {rule_file}"
+
+        if "elastic_interval" in custom:
+            interval, interval_seconds = parse_duration(custom["elastic_interval"], where, "interval")
+        elif "interval" in group_config:
+            interval, interval_seconds = parse_duration(group_config["interval"], where, "interval")
+        else:
+            interval = f"{self._schedule_interval}{self._schedule_interval_unit}"
+            interval_seconds = time_to_seconds(self._schedule_interval, self._schedule_interval_unit)
+
+        if "elastic_additional_look_back" in custom:
+            additional, additional_seconds = parse_duration(
+                custom["elastic_additional_look_back"], where, "additional_look_back"
+            )
+        elif "additional_look_back" in group_config:
+            additional, additional_seconds = parse_duration(
+                group_config["additional_look_back"], where, "additional_look_back"
+            )
+        else:
+            additional, additional_seconds = self._additional_look_back, self._additional_look_back_seconds
+
+        return interval, interval_seconds, additional, additional_seconds
 
     @staticmethod
     def correlation_group_by(query):
@@ -881,16 +966,13 @@ class ElasticPlatform(AbstractPlatform):
         if "elastic_max_signals" in rule_content.get("custom", {}):
             max_signals = parse_max_signals(rule_content["custom"]["elastic_max_signals"], f"Rule {rule_file}")
 
-        interval = f"{self._schedule_interval}{self._schedule_interval_unit}"
-        extra_look_back = self._additional_look_back_seconds
+        interval, interval_seconds, additional_look_back, extra_look_back = self.rule_schedule(rule_content, rule_file)
         # Kibana only hands the query the events since `from`: a correlation
         # must see its whole timespan, whichever bucket the run falls in
         timespan = (rule_content.get("correlation") or {}).get("timespan")
         if timespan:
             extra_look_back += time_to_seconds(timespan)
-        look_back_seconds = (
-            time_to_seconds(self._schedule_interval, self._schedule_interval_unit) + extra_look_back
-        )
+        look_back_seconds = interval_seconds + extra_look_back
         if extra_look_back:
             look_back = f"now-{look_back_seconds}s"
         else:
@@ -908,7 +990,7 @@ class ElasticPlatform(AbstractPlatform):
             "immutable": False,
             "license": self._license,
             "output_index": "",  # TODO: Check if there should be a parameter for this
-            "meta": {"from": self._additional_look_back or "5m"},  # look-back shown by Kibana
+            "meta": {"from": additional_look_back or "5m"},  # look-back shown by Kibana
             "max_signals": max_signals,
             "risk_score": risk_score,
             "risk_score_mapping": [],  # TODO: Check if this should be configurable
@@ -971,13 +1053,22 @@ class ElasticPlatform(AbstractPlatform):
 
         return json_data
 
+    @staticmethod
+    def search_range(gte, lte=None):
+        """Filter a search on the events of its window"""
+
+        window = {"gte": gte}
+        if lte:
+            window["lte"] = lte
+        return {"range": {"@timestamp": window}}
+
     def run_eql_search(self, query, es_client=None, index=None, range_gte=None):
         response = es_client.eql.search(
             index=index,
             query=query,
             wait_for_completion_timeout=0,
             size=100,
-            filter={"range": {"@timestamp": {"gte": range_gte or self._eql_search_range_gte}}},
+            filter=self.search_range(range_gte or self._eql_search_range_gte, self._eql_search_range_lte),
         )
         search_id = response["id"]
         try:
@@ -999,7 +1090,7 @@ class ElasticPlatform(AbstractPlatform):
         # Count on the cluster: the rows returned stop at the default LIMIT 1000
         response = es_client.esql.query(
             query=f"{query}\n| STATS droid_hits = COUNT(*)",
-            filter={"range": {"@timestamp": {"gte": range_gte or self._esql_search_range_gte}}},
+            filter=self.search_range(range_gte or self._esql_search_range_gte, self._esql_search_range_lte),
         )
         values = response.get("values") or [[0]]
         return values[0][0]

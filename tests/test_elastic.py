@@ -975,6 +975,189 @@ def test_removing_a_rule_kibana_refuses_to_delete_is_an_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Schedule per rule
+# ---------------------------------------------------------------------------
+
+def test_rule_runs_on_its_own_interval():
+    """A rare, expensive rule runs hourly while the platform runs every five minutes"""
+    rule = {**RULE_CONTENT, "custom": {"elastic_interval": "1h"}}
+
+    payload = export(build_platform(), rule)
+
+    assert payload["interval"] == "1h"
+    assert payload["from"] == "now-1h"
+
+
+def test_pipeline_group_sets_the_interval_of_its_rules():
+    payload = export(build_platform(), with_group(RULE_CONTENT, {"interval": "15m"}))
+
+    assert payload["interval"] == "15m"
+    assert payload["from"] == "now-15m"
+
+
+def test_rule_interval_wins_over_its_group():
+    rule = with_group({**RULE_CONTENT, "custom": {"elastic_interval": "1m"}}, {"interval": "15m"})
+
+    assert export(build_platform(), rule)["interval"] == "1m"
+
+
+def test_rule_additional_look_back_wins_over_its_group_and_the_platform():
+    platform = build_platform(additional_look_back="1m")
+    rule = with_group(
+        {**RULE_CONTENT, "custom": {"elastic_additional_look_back": "3m"}}, {"additional_look_back": "2m"}
+    )
+
+    assert export(platform, rule)["from"] == "now-480s"
+
+
+def test_group_additional_look_back_wins_over_the_platform():
+    platform = build_platform(additional_look_back="1m")
+    rule = with_group(RULE_CONTENT, {"additional_look_back": "2m"})
+
+    assert export(platform, rule)["from"] == "now-420s"
+
+
+def test_correlation_on_its_own_interval_still_sees_its_timespan():
+    rule = {**CORRELATION_CONTENT, "custom": {"elastic_interval": "1h"}}
+
+    payload = export(build_platform(), rule, CORRELATION_QUERY)
+
+    assert payload["interval"] == "1h"
+    assert payload["from"] == "now-4200s"
+    assert payload["alert_suppression"]["duration"] == {"value": 4200, "unit": "s"}
+
+
+@pytest.mark.parametrize("interval", ["soon", "0m", "5", "1w"])
+def test_invalid_rule_interval_fails_the_export_of_that_rule(interval):
+    rule = {**RULE_CONTENT, "custom": {"elastic_interval": interval}}
+
+    with pytest.raises(ValueError, match="interval"):
+        export(build_platform(), rule)
+
+
+def test_invalid_group_schedule_is_rejected_before_any_export():
+    pipelines = {"vault": {"pipelines": [], "product": "vault", "interval": "every now and then"}}
+
+    with pytest.raises(ValueError, match="vault"):
+        build_platform(pipelines=pipelines)
+
+
+# ---------------------------------------------------------------------------
+# Kibana spaces
+# ---------------------------------------------------------------------------
+
+def requested_url(monkeypatch, platform):
+    urls = []
+
+    class Response:
+        status_code = 404
+
+    def fake_get(url, **kwargs):
+        urls.append(url)
+        return Response()
+
+    monkeypatch.setattr(elastic_module.requests, "get", fake_get)
+    platform.get_rule("6f1d2c3b")
+    return urls[0]
+
+
+def test_rules_go_to_the_default_space_by_default(monkeypatch):
+    assert requested_url(monkeypatch, build_platform()) == "https://kibana.planet-express.local/api/detection_engine/rules"
+
+
+def test_rules_go_to_the_configured_space(monkeypatch):
+    platform = build_platform(space="planet-express", kibana_url="https://kibana.planet-express.local/")
+
+    assert requested_url(monkeypatch, platform) == (
+        "https://kibana.planet-express.local/s/planet-express/api/detection_engine/rules"
+    )
+
+
+@pytest.mark.parametrize("space", ["Planet Express", "slurm/../default", ""])
+def test_invalid_space_is_rejected(space):
+    with pytest.raises(ValueError, match="space"):
+        build_platform(space=space)
+
+
+# ---------------------------------------------------------------------------
+# Action overrides per rule
+# ---------------------------------------------------------------------------
+
+def test_rule_overrides_the_parameters_of_its_actions():
+    """One rule reaches another team without a second named action"""
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {
+        "dispatch_email": {"to": ["zoidberg@planet-express.local"], "subject": "Claws out"},
+        "alerts_index": None,
+    }}}
+
+    actions = actions_of(export(build_platform(actions=ACTIONS), rule))
+
+    assert list(actions) == ["planet-express-smtp", "planet-express-alerts"]
+    assert actions["planet-express-smtp"]["params"]["to"] == ["zoidberg@planet-express.local"]
+    assert actions["planet-express-smtp"]["params"]["subject"] == "Claws out"
+    # What the rule does not override comes from the config
+    assert actions["planet-express-smtp"]["params"]["cc"] == ["hermes@planet-express.local"]
+
+
+def test_rule_override_does_not_leak_into_other_rules():
+    platform = build_platform(actions=ACTIONS)
+    overriding = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"to": ["zoidberg@planet-express.local"]}}}}
+
+    export(platform, overriding)
+
+    assert actions_of(export(platform))["planet-express-smtp"]["params"]["to"] == ["leela@planet-express.local"]
+
+
+def test_rule_override_can_change_the_frequency():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_webhook": {"throttle": None, "per_alert": True}}}}
+
+    action = actions_of(export(build_platform(actions=ACTIONS), rule))["planet-express-dispatch"]
+
+    assert action["frequency"] == {"summary": False, "notifyWhen": "onActiveAlert", "throttle": None}
+
+
+@pytest.mark.parametrize(
+    "override, error",
+    [
+        ({"dispatch_slurm": {}}, "dispatch_slurm"),
+        ({"dispatch_email": {"recipients": ["fry"]}}, "recipients"),
+        ({"dispatch_email": {"connector_id": "elsewhere"}}, "connector_id"),
+        ({"dispatch_email": ["fry"]}, "dispatch_email"),
+    ],
+)
+def test_invalid_rule_override_fails_the_export_of_that_rule(override, error):
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": override}}
+
+    with pytest.raises(ValueError, match=error):
+        export(build_platform(actions=ACTIONS), rule)
+
+
+# ---------------------------------------------------------------------------
+# Search window
+# ---------------------------------------------------------------------------
+
+def test_search_runs_up_to_now_by_default(monkeypatch):
+    client = FakeSearchClient()
+    platform = searching_platform(monkeypatch, client)
+
+    platform.run_elastic_search("FROM logs-*", "esql", {})
+
+    assert client.calls[0][1]["filter"] == {"range": {"@timestamp": {"gte": "now-1h"}}}
+
+
+@pytest.mark.parametrize("language, setting", [("esql", "esql_search_range_lte"), ("eql", "eql_search_range_lte")])
+def test_search_window_can_end_in_the_past(monkeypatch, language, setting):
+    """Leave out the last minutes, still being ingested"""
+    client = FakeSearchClient()
+    platform = searching_platform(monkeypatch, client, language, **{setting: "now-5m"})
+    platform._index_name = ["logs-*"]
+
+    platform.run_elastic_search("FROM logs-*" if language == "esql" else "any where true", language, {})
+
+    assert client.calls[0][1]["filter"]["range"]["@timestamp"]["lte"] == "now-5m"
+
+
+# ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
 
