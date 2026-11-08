@@ -8,11 +8,10 @@ droid needs Python 3.11.8 or later. Work in a virtual environment, install droid
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e . -r requirements-qa.txt
-pip install pysigma-backend-splunk pysigma-backend-kusto pysigma-backend-elasticsearch
+pip install -e . -r requirements-qa.txt -r requirements-backends.txt
 ```
 
-Every runtime dependency is pinned in both `requirements.txt` and `setup.cfg`: keep the two in sync when you change one. droid pins pySigma, so check that the backends you install keep that version (`pip show pysigma`): some backend releases require a newer pySigma and upgrade it silently.
+Every runtime dependency is pinned in both `requirements.txt` and `setup.cfg`: keep the two in sync when you change one. The pySigma backends are pinned in `requirements-backends.txt` to releases supporting the pySigma version droid pins: unpinned, the latest releases of some backends require a newer pySigma and upgrade it silently, breaking the others. Bump them together, and run the tests.
 
 ## Running the tests
 

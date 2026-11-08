@@ -11,6 +11,8 @@ on:
       - 'src/**'
       - setup.cfg
       - requirements.txt
+      - requirements-backends.txt
+      - 'tests/**'
 
 jobs:
   run_tests:
@@ -28,8 +30,7 @@ jobs:
         apt update
         pip install -r requirements.txt
         pip install -r requirements-qa.txt
-        pip install pysigma-backend-splunk
-        pip install pysigma-backend-kusto
+        pip install -r requirements-backends.txt
 
     - name: Run tests
       run: |

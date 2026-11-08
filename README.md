@@ -45,9 +45,11 @@ Then install the [pySigma backend](https://sigmahq.io/docs/digging-deeper/backen
 
 | Platform | Backend |
 | --- | --- |
-| Splunk | `pip install pysigma-backend-splunk` |
-| Microsoft Sentinel and Defender XDR | `pip install pysigma-backend-kusto` |
-| Elastic Security | `pip install pysigma-backend-elasticsearch` |
+| Splunk | `pip install pysigma-backend-splunk==2.1.0` |
+| Microsoft Sentinel and Defender XDR | `pip install pysigma-backend-kusto==1.0.1` |
+| Elastic Security | `pip install pysigma-backend-elasticsearch==2.1.1` |
+
+Keep these versions: they support the pySigma version droid relies on. The latest releases of some backends require a newer pySigma and upgrade it, which breaks the other backends.
 
 ### 2. Lay out your rules
 

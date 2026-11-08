@@ -7,10 +7,14 @@ import tomllib
 
 import pytest
 
+# The Elasticsearch backend does not support pySigma 2 yet, which the Kusto
+# backend requires: an environment holding only the latter skips these tests
+elasticsearch_backend = pytest.importorskip("sigma.backends.elasticsearch")
+EqlBackend, ESQLBackend = elasticsearch_backend.EqlBackend, elasticsearch_backend.ESQLBackend
+
 from droid.convert import Conversion, load_rule
 from droid.platforms import elastic as elastic_module
 from droid.platforms.elastic import ElasticPlatform, eql_backend, esql_backend
-from sigma.backends.elasticsearch import EqlBackend, ESQLBackend
 
 LOGGER_PARAM = {"debug_mode": False, "json_enabled": False}
 
