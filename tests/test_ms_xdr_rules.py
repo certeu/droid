@@ -186,6 +186,48 @@ def test_a_query_period_without_a_frequency_is_an_error(platform, pushed, query_
     assert pushed == []
 
 
+
+# MITRE tactics
+
+
+def test_tags_are_pushed_as_tactics(platform, pushed):
+    rule_content = build_rule_content(tags=["attack.execution", "attack.t1059.001", "attack.t1059.003", "attack.t1204"])
+
+    platform.create_rule(rule_content, "DeviceEvents", RULE_FILE)
+
+    template = alert_template(pushed[0])
+    assert template["tactics"] == [
+        {
+            "tactic": "Execution",
+            "techniques": [
+                {"technique": "T1059", "subTechniques": ["T1059.001", "T1059.003"]},
+                {"technique": "T1204", "subTechniques": []},
+            ],
+        }
+    ]
+    assert "category" not in template and "mitreTechniques" not in template
+
+
+def test_every_tactic_carries_every_technique(platform, pushed):
+    """Sigma does not say which technique belongs to which tactic: none is dropped."""
+
+    rule_content = build_rule_content(tags=["attack.persistence", "attack.privilege-escalation", "attack.t1053.005"])
+
+    platform.create_rule(rule_content, "DeviceEvents", RULE_FILE)
+
+    techniques = [{"technique": "T1053", "subTechniques": ["T1053.005"]}]
+    assert alert_template(pushed[0])["tactics"] == [
+        {"tactic": "Persistence", "techniques": techniques},
+        {"tactic": "PrivilegeEscalation", "techniques": techniques},
+    ]
+
+
+def test_a_rule_without_attack_tags_has_no_tactics(platform, pushed):
+    platform.create_rule(build_rule_content(tags=["detection.threat-hunting"]), "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["tactics"] == []
+
+
 # Change detection
 
 
@@ -228,6 +270,22 @@ def test_the_same_frequency_spelled_differently_is_unchanged(platform, build_pay
     deployed = deployed_rule(payload, schedule={"frequency": "PT24H"})
 
     assert platform.rule_differences(deployed, payload) == []
+
+
+def test_tactics_in_another_order_are_unchanged(platform, build_payload):
+    payload = build_payload(build_rule_content(tags=["attack.persistence", "attack.privilege-escalation", "attack.t1053"]))
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["alertTemplate"]["tactics"].reverse()
+
+    assert platform.rule_differences(deployed, payload) == []
+
+
+def test_a_changed_technique_is_detected(platform, build_payload):
+    payload = build_payload()
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["alertTemplate"]["tactics"][0]["techniques"] = [{"technique": "T1204"}]
+
+    assert platform.rule_differences(deployed, payload) == ["tactics"]
 
 
 @pytest.mark.parametrize(

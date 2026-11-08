@@ -48,6 +48,24 @@ THROTTLING_HEADERS = (
     "x-ms-resource-unit",
 )
 
+# Sigma attack.<tactic> tags, and the MITRE tactic names Graph expects
+MITRE_TACTICS = {
+    "reconnaissance": "Reconnaissance",
+    "resource-development": "ResourceDevelopment",
+    "initial-access": "InitialAccess",
+    "execution": "Execution",
+    "persistence": "Persistence",
+    "privilege-escalation": "PrivilegeEscalation",
+    "defense-evasion": "DefenseEvasion",
+    "credential-access": "CredentialAccess",
+    "discovery": "Discovery",
+    "lateral-movement": "LateralMovement",
+    "collection": "Collection",
+    "command-and-control": "CommandAndControl",
+    "exfiltration": "Exfiltration",
+    "impact": "Impact",
+}
+
 # query_period values droid accepts, the ones of the schedule.period Microsoft
 # removed, and the schedule.frequency replacing each of them
 QUERY_PERIOD_FREQUENCIES = {
@@ -67,6 +85,18 @@ def _duration_seconds(duration):
         return duration
     days, hours, minutes, seconds = (int(value or 0) for value in match.groups())
     return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def _tactic_triples(tactics):
+    """Reduce alertTemplate tactics to (tactic, technique, sub-technique)
+    triples, so that order and empty collections Graph fills in do not count
+    as a change"""
+    triples = set()
+    for tactic in tactics or []:
+        for technique in tactic.get("techniques") or [{}]:
+            for sub_technique in technique.get("subTechniques") or [None]:
+                triples.add((tactic.get("tactic"), technique.get("technique"), sub_technique))
+    return triples
 
 
 class MicrosoftXDRPlatform(AbstractPlatform):
@@ -411,35 +441,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             severity = "high"
         else:
             severity = rule_content["level"]
-        mitreTechniques = []
-        category = None
-        if "tags" in rule_content:
-            for tag in rule_content["tags"]:
-                if tag.lower().startswith("attack."):
-                    t_value = re.match(r"attack\.([tT][0-9]{4}(\.[0-9]{3})?)", tag)
-                    if t_value:
-                        technique = t_value.group(1).upper()
-                        mitreTechniques.append(technique)
-                    c_value = tag.replace("attack.", "").lower().strip()
-                    if c_value in [
-                        "reconnaissance",
-                        "resource-development",
-                        "initial-access",
-                        "execution",
-                        "persistence",
-                        "privilege-escalation",
-                        "defense-evasion",
-                        "credential-access",
-                        "discovery",
-                        "lateral-movement",
-                        "collection",
-                        "command-and-control",
-                        "exfiltration",
-                        "impact",
-                    ]:
-                        category = c_value.replace("-", " ").title().replace(" ", "")
-        if not category:
-            category = "Execution"  # Fallback... this should never happen
+        tactics = self.build_tactics(rule_content, rule_file)
         try:
             alert_rule = {
                 "displayName": display_name,
@@ -450,9 +452,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                         "title": alert_title,
                         "description": rule_content["description"],
                         "severity": severity,
-                        "category": category,
                         "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                        "mitreTechniques": mitreTechniques,
+                        "tactics": tactics,
                     },
                     "organizationalScope": None,  # TODO: Find out what this does
                     "responseActions": [],  # TODO: Define Actions in custom rule fields
@@ -593,6 +594,43 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 raise
 
+    def build_tactics(self, rule_content, rule_file=None):
+        """Build the alertTemplate tactics from the rule's ATT&CK tags
+
+        Sigma tags tactics and techniques separately, without saying which
+        technique belongs to which tactic, so every tactic carries every
+        technique: nothing tagged is lost. Sub-techniques are grouped under
+        their technique.
+        """
+        tactics = []
+        techniques = {}
+        for tag in rule_content.get("tags") or []:
+            tag = tag.lower().strip()
+            if not tag.startswith("attack."):
+                continue
+            name = tag[len("attack."):]
+            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tactics:
+                tactics.append(MITRE_TACTICS[name])
+            match = re.fullmatch(r"(t[0-9]{4})(\.[0-9]{3})?", name)
+            if match:
+                sub_techniques = techniques.setdefault(match.group(1).upper(), [])
+                if match.group(2) and name.upper() not in sub_techniques:
+                    sub_techniques.append(name.upper())
+        if techniques and not tactics:
+            self.logger.warning(
+                f"Rule {rule_file} has ATT&CK techniques but no tactic tag, its techniques are not pushed"
+            )
+        return [
+            {
+                "tactic": tactic,
+                "techniques": [
+                    {"technique": technique, "subTechniques": list(sub_techniques)}
+                    for technique, sub_techniques in techniques.items()
+                ],
+            }
+            for tactic in tactics
+        ]
+
     def rule_differences(self, existing_rule, new_rule):
         """Name the settings where a deployed rule differs from the one droid deploys
 
@@ -622,8 +660,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         }
         for field in ("title", "description", "severity", "recommendedActions"):
             compared[field] = (existing_template.get(field) or None, new_template.get(field) or None)
-        for field in ("category", "mitreTechniques"):
-            compared[field] = (existing_template.get(field), new_template.get(field))
+        compared["tactics"] = (
+            _tactic_triples(existing_template.get("tactics")),
+            _tactic_triples(new_template["tactics"]),
+        )
         compared["responseActions"] = (
             (existing_rule.get("detectionAction") or {}).get("responseActions"),
             new_rule["detectionAction"].get("responseActions"),
