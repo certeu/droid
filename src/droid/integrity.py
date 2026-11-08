@@ -13,6 +13,7 @@ from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 from droid.export import post_rule_content
 from droid.rule_loader import load_rule_content
+from droid.variants import customer_serves_variant
 
 if TYPE_CHECKING:
     from droid.platforms.splunk import SplunkPlatform
@@ -246,6 +247,15 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
         tenant_id = info['tenant_id']
         customer_name = info.get('customer_name')
         customer_filter_dir = info.get('customer_filters_directory')
+
+        if not customer_serves_variant(rule_content, info):
+            # Export does not deploy it there: the tenant does not carry the
+            # telemetry the variant queries, so its absence is not drift
+            logger.debug(
+                f"Skipping tenant {tenant_id} from group id {group}: "
+                f"it does not carry the {rule_content['_droid_variant']['name']} telemetry"
+            )
+            continue
 
         logger.debug(f"Processing rule on tenant {tenant_id} from group id {group}")
 

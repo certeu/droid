@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from droid.integrity import integrity_rule
 from droid.platforms.ms_xdr import MicrosoftXDRPlatform
+from droid.variants import Variant, variant_rule_content
 
 LOGGER_PARAM = {
     "debug_mode": False,
@@ -244,6 +245,33 @@ def test_xdr_mssp_unreadable_tenant_does_not_hide_the_next_ones():
     run_integrity(platform, build_rule_content(), "the new query", mssp=True)
 
     assert len(checked) == 1
+
+
+VARIANT_EXPORT_LIST = {
+    "group-zoidberg": {"tenant_id": "tenant-zoidberg", "variants": ["defender"]},
+    "group-slurm": {"tenant_id": "tenant-slurm", "variants": ["thirdparty"]},
+}
+
+
+def defender_variant_content():
+    return variant_rule_content(build_rule_content(), Variant("defender", "group_defender", {}, True))
+
+
+def test_xdr_mssp_tenant_without_the_variant_is_not_checked():
+    """Export skips a tenant not carrying the telemetry a variant queries:
+    the rule missing there is expected, not drift"""
+    rule_content = defender_variant_content()
+    platform = FakeXDRPlatform(
+        rules={"tenant-zoidberg": build_xdr_rule(query="the new query", rule_content=rule_content), "tenant-slurm": None},
+        export_list=VARIANT_EXPORT_LIST,
+    )
+    assert not run_integrity(platform, rule_content, "the new query", mssp=True)
+
+
+def test_xdr_mssp_tenant_with_the_variant_is_still_checked():
+    rule_content = defender_variant_content()
+    platform = FakeXDRPlatform(rules={"tenant-zoidberg": None, "tenant-slurm": None}, export_list=VARIANT_EXPORT_LIST)
+    assert run_integrity(platform, rule_content, "the new query", mssp=True)
 
 
 def test_xdr_mssp_removed_rule_still_on_the_platform():
