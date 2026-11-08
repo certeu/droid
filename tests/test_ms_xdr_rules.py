@@ -436,6 +436,44 @@ def test_an_invalid_action_is_an_error(platform, action):
         platform.parse_actions([action], rule_file=RULE_FILE)
 
 
+# Lookback
+
+
+def test_a_rule_sets_its_lookback(platform, pushed):
+    platform.create_rule(build_rule_content({"query_period": "1H", "xdr_lookback": "PT2H"}), "DeviceEvents", RULE_FILE)
+
+    assert pushed[0]["schedule"] == {"frequency": "PT1H", "lookback": "PT2H"}
+
+
+def test_without_a_lookback_microsoft_picks_it(platform, pushed):
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+
+    assert "lookback" not in pushed[0]["schedule"]
+
+
+@pytest.mark.parametrize("lookback", ["2H", "two hours", 2])
+def test_a_lookback_that_is_not_a_duration_is_an_error(platform, pushed, lookback):
+    with pytest.raises(ValueError):
+        platform.create_rule(build_rule_content({"xdr_lookback": lookback}), "DeviceEvents", RULE_FILE)
+
+
+def test_the_default_lookback_microsoft_picks_is_not_a_change(platform, pushed):
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+    deployed = copy.deepcopy(pushed[0])
+    deployed["schedule"]["lookback"] = "PT4H"
+
+    assert platform.rule_differences(deployed, pushed[0]) == []
+
+
+@pytest.mark.parametrize("deployed_lookback, differences", [("PT120M", []), ("PT4H", ["lookback"])])
+def test_a_lookback_the_rule_sets_is_compared_as_a_duration(platform, pushed, deployed_lookback, differences):
+    platform.create_rule(build_rule_content({"xdr_lookback": "PT2H"}), "DeviceEvents", RULE_FILE)
+    deployed = copy.deepcopy(pushed[0])
+    deployed["schedule"]["lookback"] = deployed_lookback
+
+    assert platform.rule_differences(deployed, pushed[0]) == differences
+
+
 # Change detection
 
 
