@@ -1,18 +1,9 @@
 name: Test Build
 
 on:
-  push:
-    branches:
-      - '**'
-    tags:
-      - '*'
   pull_request:
-    paths:
-      - 'src/**'
-      - setup.cfg
-      - requirements.txt
-      - requirements-backends.txt
-      - 'tests/**'
+    branches:
+      - main
 
 jobs:
   run_tests:
