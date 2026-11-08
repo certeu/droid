@@ -130,15 +130,11 @@ QUERY_PERIOD_FREQUENCIES = {
 }
 
 
-# The ISO 8601 durations Graph uses for a rule's schedule, PT1H or P1D
-DURATION_PATTERN = r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?"
-
-
 def _duration_seconds(duration):
     """Length of an ISO 8601 duration such as PT1H or P1D, so that two
     spellings of the same frequency (P1D, PT24H) compare equal. A value this
     does not understand is returned as is, and only equals itself."""
-    match = re.fullmatch(DURATION_PATTERN, str(duration))
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", str(duration))
     if not duration or not match:
         return duration
     days, hours, minutes, seconds = (int(value or 0) for value in match.groups())
@@ -574,14 +570,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         alert_rule["schedule"] = {
             "frequency": self.process_query_period(query_period, rule_file)
         }
-        # Without it, Microsoft sets a lookback following the frequency
-        lookback = rule_content.get("custom", {}).get("xdr_lookback")
-        if lookback is not None:
-            if not isinstance(lookback, str) or not re.fullmatch(DURATION_PATTERN, lookback) or lookback in ("P", "PT"):
-                message = f"custom.xdr_lookback must be an ISO 8601 duration such as PT4H or P1D, got '{lookback}' - {rule_file}"
-                self.logger.error(message)
-                raise ValueError(message)
-            alert_rule["schedule"]["lookback"] = lookback
 
         if "custom" in rule_content:
             if "actions" in rule_content["custom"]:
@@ -806,13 +794,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 _duration_seconds(new_rule["schedule"]["frequency"]),
             ),
         }
-        # Only a lookback the rule sets is compared: Microsoft picks the
-        # default one, which droid does not know
-        if "lookback" in new_rule["schedule"]:
-            compared["lookback"] = (
-                _duration_seconds((existing_rule.get("schedule") or {}).get("lookback")),
-                _duration_seconds(new_rule["schedule"]["lookback"]),
-            )
         for field in ("title", "description", "severity", "recommendedActions"):
             compared[field] = (existing_template.get(field) or None, new_template.get(field) or None)
         compared["tactics"] = (
