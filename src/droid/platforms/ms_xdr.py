@@ -141,6 +141,25 @@ def _duration_seconds(duration):
     return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
+def graph_rule_id(rule_id):
+    """The id Graph accepts for a rule: letters, digits, dashes and
+    underscores, starting with a letter, 100 characters at most. A Sigma id
+    is a UUID, which more often than not starts with a digit."""
+    return ("droid-" + re.sub(r"[^A-Za-z0-9_-]", "-", str(rule_id)))[:100]
+
+
+def every_entity_category(entity_mappings):
+    """An entityMappings payload naming every category, empty when unmapped
+
+    Graph merges the alertTemplate of an update into the stored one: a
+    category left out of the payload would keep its stored mappings, and
+    differ from the rule on every export after.
+    """
+    payload = {category: [] for category in MicrosoftXDRPlatform.ENTITY_MAPPING_COLUMNS}
+    payload.update(copy.deepcopy(entity_mappings))
+    return payload
+
+
 def _tactic_triples(tactics):
     """Reduce alertTemplate tactics to (tactic, technique, sub-technique)
     triples, so that order and empty collections Graph fills in do not count
@@ -516,7 +535,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         tactics = self.build_tactics(rule_content, rule_file)
         alert_rule = {
             # Graph v1.0 has the client name a rule it creates
-            "id": rule_content["id"],
+            "id": graph_rule_id(rule_content["id"]),
             "displayName": display_name,
             "status": status,
             "queryCondition": {"queryText": rule_converted},
@@ -527,7 +546,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     "severity": severity,
                     "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                     "tactics": tactics,
-                    "entityMappings": copy.deepcopy(DEFAULT_ENTITY_MAPPINGS),
+                    "entityMappings": every_entity_category(DEFAULT_ENTITY_MAPPINGS),
                 },
                 "organizationalScope": None,  # TODO: Find out what this does
                 "automatedActions": self.parse_actions([], rule_file=rule_file),
@@ -569,7 +588,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 alert_rule["detectionAction"]["alertTemplate"][
                     "entityMappings"
-                ] = entityMappings
+                ] = every_entity_category(entityMappings)
 
         return alert_rule
 

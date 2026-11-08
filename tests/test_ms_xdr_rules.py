@@ -8,6 +8,7 @@ tactics, entityMappings and automatedActions.
 """
 
 import copy
+import re
 
 import pytest
 
@@ -81,6 +82,11 @@ def alert_template(payload):
     return payload["detectionAction"]["alertTemplate"]
 
 
+def entity_mappings(payload):
+    """The mapped categories of the entityMappings pushed"""
+    return {category: entries for category, entries in alert_template(payload)["entityMappings"].items() if entries}
+
+
 # Entity mappings
 
 
@@ -103,7 +109,7 @@ def test_xdr_entity_mappings_are_pushed_as_entity_mappings(platform, pushed):
 
     platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
-    assert alert_template(pushed[0])["entityMappings"] == {
+    assert entity_mappings(pushed[0]) == {
         "accounts": [{"upnColumn": "AccountUpn", "sidColumn": "AccountSid"}],
         "hosts": [{"deviceIdColumn": "DeviceId"}],
     }
@@ -124,7 +130,7 @@ def test_sentinel_entity_mappings_are_left_to_sentinel(platform, pushed):
 
     platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
-    assert alert_template(pushed[0])["entityMappings"] == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+    assert entity_mappings(pushed[0]) == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
 
 
 def test_a_rule_without_entity_mappings_maps_its_device(platform, pushed):
@@ -133,7 +139,7 @@ def test_a_rule_without_entity_mappings_maps_its_device(platform, pushed):
 
     platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
 
-    assert alert_template(pushed[0])["entityMappings"] == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+    assert entity_mappings(pushed[0]) == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
 
 
 def test_entity_mappings_replace_the_default_device(platform, pushed):
@@ -145,7 +151,18 @@ def test_entity_mappings_replace_the_default_device(platform, pushed):
 
     platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
-    assert alert_template(pushed[0])["entityMappings"] == {"accounts": [{"upnColumn": "AccountUpn"}]}
+    assert entity_mappings(pushed[0]) == {"accounts": [{"upnColumn": "AccountUpn"}]}
+
+
+def test_every_entity_category_is_sent(platform, pushed):
+    """Graph merges an update into the stored alert template: a category left
+    out would keep mappings the rule no longer has."""
+
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+
+    mappings = alert_template(pushed[0])["entityMappings"]
+    assert set(mappings) == set(MicrosoftXDRPlatform.ENTITY_MAPPING_COLUMNS)
+    assert mappings["accounts"] == []
 
 
 def test_a_deployed_rule_without_entities_is_updated(platform, build_payload):
@@ -665,7 +682,25 @@ def test_a_new_rule_is_created_with_the_sigma_id(platform, build_payload, graph)
 
     push(platform, payload)
 
-    assert graph["post"][0]["id"] == build_rule_content()["id"]
+    assert graph["post"][0]["id"] == "droid-" + build_rule_content()["id"]
+
+
+@pytest.mark.parametrize(
+    "rule_id, graph_id",
+    [
+        ("0b6a1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "droid-0b6a1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d"),
+        ("planet express/delivery.42", "droid-planet-express-delivery-42"),
+        ("x" * 120, "droid-" + "x" * 94),
+    ],
+    ids=["uuid-starting-with-a-digit", "invalid-characters", "too-long"],
+)
+def test_the_rule_id_is_one_graph_accepts(rule_id, graph_id):
+    """Graph wants letters, digits, dashes or underscores, a letter first,
+    100 characters at most"""
+    from droid.platforms.ms_xdr import graph_rule_id
+
+    assert graph_rule_id(rule_id) == graph_id
+    assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,99}", graph_rule_id(rule_id))
 
 
 def test_an_update_does_not_change_the_rule_id(platform, build_payload, graph):
