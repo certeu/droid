@@ -9,6 +9,7 @@ tactics, entityMappings and automatedActions.
 
 import copy
 import re
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -892,7 +893,6 @@ def test_a_rule_graph_holds_is_returned(platform, monkeypatch):
 def test_removing_a_rule_that_cannot_be_looked_up_is_an_error(platform, monkeypatch):
     """It used to log the rule as already removed"""
 
-    platform._tenant_id = "tenant-planet-express"
     monkeypatch.setattr(platform, "_get", lambda **kwargs: ({"error": {"message": "Missing application scopes"}}, 403))
     deleted = []
     monkeypatch.setattr(platform, "_delete", lambda **kwargs: deleted.append(kwargs) or ({}, 204))
@@ -900,4 +900,42 @@ def test_removing_a_rule_that_cannot_be_looked_up_is_an_error(platform, monkeypa
     with pytest.raises(Exception):
         platform.remove_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
     assert deleted == []
+
+
+# Default authentication
+
+
+def test_default_authentication_targets_the_configured_tenant(platform):
+    """It was never read, and the first Graph call of a single tenant run
+    failed on the missing tenant"""
+
+    assert platform._tenant_id == "tenant-planet-express"
+
+
+def test_default_authentication_without_a_tenant_still_runs(monkeypatch):
+    parameters = {key: value for key, value in XDR_PARAMETERS.items() if key != "tenant_id"}
+    platform = MicrosoftXDRPlatform(parameters, LOGGER_PARAM)
+    monkeypatch.setattr(platform, "_get", lambda **kwargs: ({"value": []}, 200))
+
+    assert platform._tenant_id is None
+    assert platform.get_rule("8d3b2a6e-6f0a-4c1e-9a52-1f2e3d4c5b6a") is None
+
+
+def test_a_single_tenant_request_reaches_graph_with_default_authentication(platform, monkeypatch):
+    """The request path reads the tenant to look its token up"""
+
+    monkeypatch.setattr(platform, "acquire_token", lambda tenant_id=None: ("a-token", datetime.now() + timedelta(hours=1)))
+    sent = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"value": []}
+
+    monkeypatch.setattr("droid.platforms.ms_xdr.requests.get", lambda url, **kwargs: sent.append(url) or Response())
+
+    assert platform.get_rule("8d3b2a6e-6f0a-4c1e-9a52-1f2e3d4c5b6a") is None
+    assert sent == ["https://graph.microsoft.com/v1.0/security/rules/detectionRules"]
 

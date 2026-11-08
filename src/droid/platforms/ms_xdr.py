@@ -242,7 +242,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self._client_secret = self._parameters["client_secret"]
             self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (self._parameters["search_auth"] or self._parameters["export_auth"]):
-            pass
+            # The token comes from the environment, which knows its tenant: the
+            # configured tenant_id only names the one a single tenant run
+            # targets, and keys the token cache
+            self._tenant_id = self._parameters.get("tenant_id")
         else:
             raise Exception('MicrosoftXDRPlatform: "search_auth" and "export_auth" parameters must be one of "default" or "app" or "credential_file".')
         if "alert_prefix" in self._parameters:
