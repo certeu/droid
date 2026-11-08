@@ -164,6 +164,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception('MicrosoftXDRPlatform: "query_period" parameter is required.')
         else:
             self._query_period = self._parameters["query_period"]
+        self._warn_about_continuous_query_periods()
         if "auth_cert" in self._parameters:
             self._auth_cert = self._parameters["auth_cert"]
         else:
@@ -207,6 +208,26 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._token_cache = {}
         # Monotonic deadline per tenant while a throttling window is known to be open
         self._throttled_until = {}
+
+    def _warn_about_continuous_query_periods(self):
+        """Say once, when droid starts, that a continuous query_period no longer deploys
+
+        Every rule it applies to fails to export, each with its own error deep
+        in the log: a configuration written for the removed schedule.period
+        deserves one warning up front naming the setting to change.
+        """
+        continuous = []
+        if str(self._query_period) == "0":
+            continuous.append("query_period")
+        for group, settings in (self._query_period_groups or {}).items():
+            if str(settings.get("query_period")) == "0":
+                continuous.append(f"query_period_groups.{group}")
+        if continuous:
+            self.logger.warning(
+                f"Breaking change: the continuous query_period '0', set in {', '.join(continuous)}, "
+                "has no documented equivalent in the Graph API custom detection rules. Rules "
+                f"using it will fail to export: set one of {list(QUERY_PERIOD_FREQUENCIES)} instead"
+            )
 
     def set_convert_rule_callback(self, callback: Callable) -> None:
         """Set the callback function for converting rules with customer-specific filters

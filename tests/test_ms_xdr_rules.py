@@ -481,3 +481,38 @@ def test_an_update_does_not_change_the_rule_id(platform, build_payload, graph):
 
 def test_rules_are_managed_on_graph_v1(platform):
     assert platform._api_base_url == "https://graph.microsoft.com/v1.0"
+
+
+# Breaking changes
+
+
+@pytest.fixture
+def warnings(monkeypatch):
+    """ColorLogger sits outside the logging hierarchy, out of caplog's reach,
+    and these warnings come from the constructor, before an instance exists"""
+    recorded = []
+    monkeypatch.setattr(
+        "droid.platforms.ms_xdr.ColorLogger.warning",
+        lambda self, message, *args, **kwargs: recorded.append(message),
+    )
+    return recorded
+
+
+def test_a_continuous_configuration_is_warned_about_up_front(warnings):
+    """Every rule using it fails to export: say so once when droid starts."""
+
+    parameters = dict(XDR_PARAMETERS, query_period="0")
+    parameters["rule_parameters"] = {"query_period_groups": {"slurm_factory": {"query_period": "0"}}}
+
+    MicrosoftXDRPlatform(parameters, LOGGER_PARAM)
+
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "Breaking change: the continuous query_period '0', set in query_period, query_period_groups.slurm_factory,"
+    )
+
+
+def test_a_scheduled_configuration_is_not_warned_about(warnings):
+    MicrosoftXDRPlatform(dict(XDR_PARAMETERS), LOGGER_PARAM)
+
+    assert warnings == []
