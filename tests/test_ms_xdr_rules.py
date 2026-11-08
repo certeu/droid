@@ -130,16 +130,36 @@ def test_sentinel_entity_mappings_are_left_to_sentinel(platform, pushed):
 
     platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
-    assert entity_mappings(pushed[0]) == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+    assert "entityMappings" not in alert_template(pushed[0])
 
 
-def test_a_rule_without_entity_mappings_maps_its_device(platform, pushed):
-    """Microsoft derives no entity: without one, alerts correlate into
-    incidents poorly. The device is what impactedAssets mapped by default."""
+def test_a_rule_without_entity_mappings_is_created_with_its_device(platform, build_payload, graph):
+    """Microsoft derives no entity for a new rule: without one, its alerts
+    correlate into incidents poorly. The device is what impactedAssets mapped
+    by default."""
 
-    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+    push(platform, build_payload())
 
-    assert entity_mappings(pushed[0]) == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+    assert entity_mappings(graph["post"][0]) == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+
+
+def test_the_entities_of_a_deployed_rule_without_mappings_are_left_alone(platform, build_payload, graph):
+    """Microsoft converted the impactedAssets of the rules droid deployed
+    before into entities, often more than droid's default: enforcing it would
+    strip them."""
+
+    payload = build_payload()
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["alertTemplate"]["entityMappings"] = {
+        "hosts": [{"deviceIdColumn": "DeviceId"}],
+        "files": [{"sha256Column": "SHA256"}],
+        "processes": [{"sha256Column": "SHA256"}],
+    }
+    graph["existing"] = deployed
+
+    assert platform.rule_differences(deployed, payload) == []
+    push(platform, payload)
+    assert graph["patch"] == []
 
 
 def test_entity_mappings_replace_the_default_device(platform, pushed):
@@ -158,21 +178,125 @@ def test_every_entity_category_is_sent(platform, pushed):
     """Graph merges an update into the stored alert template: a category left
     out would keep mappings the rule no longer has."""
 
-    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+    custom = {
+        "xdr_entity_mappings": [
+            {"entity_type": "files", "field_mappings": [{"identifier": "sha256Column", "column_name": "SHA256"}]}
+        ]
+    }
+
+    platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
     mappings = alert_template(pushed[0])["entityMappings"]
     assert set(mappings) == set(MicrosoftXDRPlatform.ENTITY_MAPPING_COLUMNS)
-    assert mappings["accounts"] == []
+    assert mappings["hosts"] == []
 
 
-def test_a_deployed_rule_without_entities_is_updated(platform, build_payload):
-    """Rules exported without entities must get the default device mapped"""
+# Entity mappings of a log source
 
-    payload = build_payload()
-    deployed = deployed_rule(payload)
-    deployed["detectionAction"]["alertTemplate"]["entityMappings"] = {"hosts": [], "accounts": []}
+PROCESS_CREATION_ENTITIES = [
+    {
+        "entity_type": "hosts",
+        "field_mappings": [
+            {"identifier": "deviceIdColumn", "column_name": "DeviceId"},
+            {"identifier": "nameColumn", "column_name": "DeviceName"},
+        ],
+    },
+    {"entity_type": "files", "field_mappings": [{"identifier": "sha256Column", "column_name": "SHA256"}]},
+]
 
-    assert platform.rule_differences(deployed, payload) == ["entityMappings"]
+
+def platform_with_entity_groups(groups):
+    parameters = dict(XDR_PARAMETERS, rule_parameters={"entity_mappings_groups": groups})
+    return MicrosoftXDRPlatform(parameters, LOGGER_PARAM)
+
+
+@pytest.fixture
+def grouped_platform(monkeypatch):
+    platform = platform_with_entity_groups(
+        {"windows_process_creation": {"product": "windows", "category": "process_creation", "entity_mappings": PROCESS_CREATION_ENTITIES}}
+    )
+    payloads = []
+    monkeypatch.setattr(platform, "push_detection_rule", lambda alert_rule=None, **kwargs: payloads.append(alert_rule))
+    return platform, payloads
+
+
+def with_logsource(rule_content, **logsource):
+    rule_content["logsource"] = logsource
+    return rule_content
+
+
+def test_a_rule_takes_the_entity_mappings_of_its_log_source(grouped_platform):
+    platform, payloads = grouped_platform
+
+    platform.create_rule(
+        with_logsource(build_rule_content(), product="windows", category="process_creation"), "DeviceEvents", RULE_FILE
+    )
+
+    assert entity_mappings(payloads[0]) == {
+        "hosts": [{"deviceIdColumn": "DeviceId", "nameColumn": "DeviceName"}],
+        "files": [{"sha256Column": "SHA256"}],
+    }
+
+
+def test_the_entity_mappings_of_a_log_source_are_enforced(grouped_platform):
+    """Defined in code, they are compared like any other setting"""
+
+    platform, payloads = grouped_platform
+    platform.create_rule(
+        with_logsource(build_rule_content(), product="windows", category="process_creation"), "DeviceEvents", RULE_FILE
+    )
+    deployed = deployed_rule(payloads[0])
+    deployed["detectionAction"]["alertTemplate"]["entityMappings"] = {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+
+    assert platform.rule_differences(deployed, payloads[0]) == ["entityMappings"]
+
+
+def test_a_rule_overrides_the_entity_mappings_of_its_log_source(grouped_platform):
+    platform, payloads = grouped_platform
+    custom = {
+        "xdr_entity_mappings": [
+            {"entity_type": "accounts", "field_mappings": [{"identifier": "sidColumn", "column_name": "AccountSid"}]}
+        ]
+    }
+
+    platform.create_rule(
+        with_logsource(build_rule_content(custom), product="windows", category="process_creation"), "DeviceEvents", RULE_FILE
+    )
+
+    assert entity_mappings(payloads[0]) == {"accounts": [{"sidColumn": "AccountSid"}]}
+
+
+def test_a_rule_of_another_log_source_does_not_take_them(grouped_platform):
+    platform, payloads = grouped_platform
+
+    platform.create_rule(with_logsource(build_rule_content(), product="linux", category="process_creation"), "DeviceEvents", RULE_FILE)
+
+    assert "entityMappings" not in alert_template(payloads[0])
+
+
+def test_a_rule_without_log_source_takes_no_group(grouped_platform):
+    """Raw rules may have no log source"""
+
+    platform, payloads = grouped_platform
+
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+
+    assert "entityMappings" not in alert_template(payloads[0])
+
+
+@pytest.mark.parametrize(
+    "group",
+    [
+        {"product": "windows", "category": "process_creation"},
+        {"product": "windows", "category": "process_creation", "entity_mappings": [{"entity_type": "Host"}]},
+    ],
+    ids=["no-entity-mappings", "invalid-entity-mappings"],
+)
+def test_an_invalid_entity_mappings_group_fails_when_droid_starts(group):
+    """It would fail every rule of its log source, each with its own error"""
+
+    with pytest.raises(ValueError):
+        platform_with_entity_groups({"windows_process_creation": group})
 
 
 def test_legacy_impacted_assets_are_no_longer_pushed(platform, pushed):

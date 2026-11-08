@@ -112,9 +112,10 @@ IDENTIFIER_COLUMNS = {
     "initiatingProcessSHA256": ("sha256Column", "InitiatingProcessSHA256"),
 }
 
-# The entities of a rule without custom.xdr_entity_mappings. Microsoft does not
-# derive any: a rule without them has its alerts grouped into incidents
-# poorly. The device is what droid mapped by default with impactedAssets.
+# The entities a rule is created with when neither the rule nor its log source
+# maps any. Microsoft does not derive any for a new rule, whose alerts then
+# group into incidents poorly. The device is what droid mapped by default with
+# impactedAssets.
 DEFAULT_ENTITY_MAPPINGS = {"hosts": [{"deviceIdColumn": "DeviceId"}]}
 
 # query_period values droid accepts, the ones of the schedule.period Microsoft
@@ -208,6 +209,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.warning("Invalid 'days_ago' value. Expected a value between 1 and 30, but got %d. Defaulting to 1")
             self._search_daysago = 1
         self._query_period_groups = self._parameters.get("rule_parameters", {}).get("query_period_groups")
+        self._entity_mappings_groups = self._parameters.get("rule_parameters", {}).get("entity_mappings_groups") or {}
+        for group, settings in self._entity_mappings_groups.items():
+            # A mistake in a group would fail every rule of its log source: say
+            # so once, when droid starts
+            if not settings.get("entity_mappings"):
+                raise self._entity_mapping_error("A group needs non-empty 'entity_mappings'", f"entity_mappings_groups.{group}")
+            self.parse_entity_mappings(settings["entity_mappings"], rule_file=f"entity_mappings_groups.{group}")
         if "query_period" not in self._parameters:
             raise Exception('MicrosoftXDRPlatform: "query_period" parameter is required.')
         else:
@@ -553,12 +561,15 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     "description": rule_content["description"],
                     "severity": severity,
                     "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                    "entityMappings": every_entity_category(DEFAULT_ENTITY_MAPPINGS),
                 },
                 "organizationalScope": None,  # TODO: Find out what this does
                 "automatedActions": self.parse_actions([], rule_file=rule_file),
             },
         }
+        entity_mappings = self.rule_entity_mappings(rule_content, rule_file)
+        if entity_mappings is not None:
+            alert_rule["detectionAction"]["alertTemplate"]["entityMappings"] = every_entity_category(entity_mappings)
+
         if tactics:
             # Never sent empty: Graph then accepts the update but silently
             # drops the whole alert template and the automated actions in it
@@ -591,15 +602,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.warning(
                     f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.xdr_entity_mappings - {rule_file}"
                 )
-            # Not custom.entity_mappings: Sentinel reads that key with its own
-            # vocabulary (Account/FullName), which XDR rejects
-            if "xdr_entity_mappings" in rule_content["custom"]:
-                entityMappings = self.parse_entity_mappings(
-                    rule_content["custom"]["xdr_entity_mappings"], rule_file=rule_file
-                )
-                alert_rule["detectionAction"]["alertTemplate"][
-                    "entityMappings"
-                ] = every_entity_category(entityMappings)
 
         return alert_rule
 
@@ -721,6 +723,31 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 tactics.append(MITRE_TACTICS[name])
         return tactics or None
 
+    def rule_entity_mappings(self, rule_content, rule_file):
+        """The entity mappings droid manages for a rule, or None when it
+        manages none
+
+        The rule's custom.xdr_entity_mappings win over the ones of its log
+        source, from the entity_mappings_groups of the configuration. A rule
+        with neither is created with the device mapped, and after that its
+        entities are left as they are: Microsoft converted the impactedAssets
+        of the rules deployed before into entities, often more than droid's
+        default, which enforcing it would strip.
+        """
+        # Not custom.entity_mappings: Sentinel reads that key with its own
+        # vocabulary (Account/FullName), which XDR rejects
+        if "xdr_entity_mappings" in rule_content.get("custom", {}):
+            return self.parse_entity_mappings(rule_content["custom"]["xdr_entity_mappings"], rule_file=rule_file)
+        # A raw rule may have no log source to match a group on
+        if self._entity_mappings_groups and rule_content.get("logsource"):
+            group = get_pipeline_group_match(rule_content, self._entity_mappings_groups)
+            if group:
+                self.logger.debug(f"Applying the entity mappings of group {group}")
+                return self.parse_entity_mappings(
+                    self._entity_mappings_groups[group]["entity_mappings"], rule_file=rule_file
+                )
+        return None
+
     def build_tactics(self, rule_content, rule_file=None):
         """Build the alertTemplate tactics from the rule's ATT&CK tags
 
@@ -818,13 +845,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             _automated_action_set(new_rule["detectionAction"]["automatedActions"]),
         )
 
-        # The service fills every category and column, unset ones as empty
-        # strings, so both sides are reduced to their non-empty (category,
-        # column, value) triples before comparing.
-        compared["entityMappings"] = (
-            self._entity_mapping_triples(existing_template.get("entityMappings")),
-            self._entity_mapping_triples(new_template["entityMappings"]),
-        )
+        # Only the entities the rule or its log source maps are compared: the
+        # others are Microsoft's, see rule_entity_mappings. The service fills
+        # every category and column, unset ones as empty strings, so both
+        # sides are reduced to their non-empty (category, column, value)
+        # triples before comparing.
+        if "entityMappings" in new_template:
+            compared["entityMappings"] = (
+                self._entity_mapping_triples(existing_template.get("entityMappings")),
+                self._entity_mapping_triples(new_template["entityMappings"]),
+            )
 
         differences = [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
         for field in differences:
@@ -876,6 +906,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             send = self._patch
         else:
             payload = alert_rule
+            if "entityMappings" not in alert_rule["detectionAction"]["alertTemplate"]:
+                # A rule without entities groups its alerts into incidents poorly
+                payload = copy.deepcopy(alert_rule)
+                payload["detectionAction"]["alertTemplate"]["entityMappings"] = every_entity_category(DEFAULT_ENTITY_MAPPINGS)
             api_url = "/security/rules/detectionRules"
             send = self._post
 
