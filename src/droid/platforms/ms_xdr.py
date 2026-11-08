@@ -463,11 +463,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 alert_rule["detectionAction"]["responseActions"] = responseActions
             if "impactedAssets" in rule_content["custom"]:
                 self.logger.warning(
-                    f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.entity_mappings - {rule_file}"
+                    f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.xdr_entity_mappings - {rule_file}"
                 )
-            if "entity_mappings" in rule_content["custom"]:
+            # Not custom.entity_mappings: Sentinel reads that key with its own
+            # vocabulary (Account/FullName), which XDR rejects
+            if "xdr_entity_mappings" in rule_content["custom"]:
                 entityMappings = self.parse_entity_mappings(
-                    rule_content["custom"]["entity_mappings"], rule_file=rule_file
+                    rule_content["custom"]["xdr_entity_mappings"], rule_file=rule_file
                 )
                 alert_rule["detectionAction"]["alertTemplate"][
                     "entityMappings"
@@ -605,7 +607,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             ):
                 change = True
             # entityMappings is only part of the payload when the rule defines
-            # custom.entity_mappings; otherwise the service auto-derives it and
+            # custom.xdr_entity_mappings; otherwise the service auto-derives it and
             # a comparison would flag every rule as changed. The service fills
             # every category and column, unset ones as empty strings, so both
             # sides are reduced to their non-empty (category, column, value)
@@ -815,7 +817,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             response_actions.append(response_action)
         return response_actions
 
-    # Valid column identifiers per entity category, from the Graph beta
+    # Valid column identifiers per entity category, from the Graph
     # entityMappingConfiguration complex type.
     ENTITY_MAPPING_COLUMNS = {
         "accounts": "aadUserIdColumn dnsDomainColumn nameColumn ntDomainColumn sidColumn upnColumn upnSuffixColumn",
@@ -843,12 +845,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         return ValueError(message)
 
     def parse_entity_mappings(self, entity_mappings, rule_file=None):
-        """Build the alertTemplate entityMappings payload from custom.entity_mappings.
+        """Build the alertTemplate entityMappings payload from custom.xdr_entity_mappings.
 
-        The YAML mirrors the Sentinel custom.entity_mappings shape: a list of
-        entries, each with an entity_type and field_mappings of
-        identifier/column_name pairs. Every entry becomes one mapping object in
-        the matching category of the Graph beta entityMappingConfiguration.
+        The YAML has the shape of the Sentinel custom.entity_mappings, with the
+        Graph vocabulary instead: a list of entries, each with an entity_type
+        and field_mappings of identifier/column_name pairs. Every entry becomes
+        one mapping object in the matching category of the Graph
+        entityMappingConfiguration.
         """
         entityMappingConfiguration = {}
         for mapping in entity_mappings:
