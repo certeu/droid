@@ -201,7 +201,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         
         self._max_throttle_wait = self._parameters.get("max_throttle_wait", DEFAULT_MAX_THROTTLE_WAIT)
 
-        self._api_base_url = "https://graph.microsoft.com/beta"
+        # v1.0 rather than beta: Microsoft does not support beta in production,
+        # and changed the custom detection rules there under droid
+        self._api_base_url = "https://graph.microsoft.com/v1.0"
         self._token_cache = {}
         # Monotonic deadline per tenant while a throttling window is known to be open
         self._throttled_until = {}
@@ -492,6 +494,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         tactics = self.build_tactics(rule_content, rule_file)
         try:
             alert_rule = {
+                # Graph v1.0 has the client name a rule it creates
+                "id": rule_content["id"],
                 "displayName": display_name,
                 "status": status,
                 "queryCondition": {"queryText": rule_converted},
@@ -757,7 +761,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         existing_rule = self.get_rule(rule_content["id"], tenant_id=tenant_id)
         if existing_rule:
             self.logger.info("Rule already exists")
-            payload = alert_rule
+            # The id of a rule is set when it is created and never changes. A
+            # rule created on beta has one Graph chose, not the Sigma id.
+            payload = {key: value for key, value in alert_rule.items() if key != "id"}
             if existing_rule.get("status") == "autoDisabled" and alert_rule["status"] == "enabled":
                 # Microsoft turns off a rule that keeps failing. Turning it back
                 # on every export would only have it fail again: an analyst has
@@ -766,7 +772,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     f"Rule {rule_file} was auto-disabled by Microsoft XDR, leaving it disabled - fix and re-enable it on the platform",
                     extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
                 )
-                payload = {key: value for key, value in alert_rule.items() if key != "status"}
+                payload = {key: value for key, value in payload.items() if key != "status"}
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
             else:

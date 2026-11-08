@@ -455,3 +455,29 @@ def test_disabling_an_auto_disabled_rule_is_pushed(platform, build_payload, grap
     push(platform, payload)
 
     assert graph["patch"][0]["status"] == "disabled"
+
+
+def test_a_new_rule_is_created_with_the_sigma_id(platform, build_payload, graph):
+    """Graph v1.0 has the client choose the id of a rule it creates."""
+
+    payload = build_payload()
+
+    push(platform, payload)
+
+    assert graph["post"][0]["id"] == build_rule_content()["id"]
+
+
+def test_an_update_does_not_change_the_rule_id(platform, build_payload, graph):
+    """A rule created on beta has an id Graph chose, which stays its id."""
+
+    payload = build_payload()
+    graph["existing"] = deployed_rule(payload, id="1255", status="disabled")
+
+    push(platform, payload)
+
+    assert "id" not in graph["patch"][0]
+    assert graph["patch"][0]["status"] == "enabled"
+
+
+def test_rules_are_managed_on_graph_v1(platform):
+    assert platform._api_base_url == "https://graph.microsoft.com/v1.0"
