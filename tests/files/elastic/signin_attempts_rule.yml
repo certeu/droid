@@ -1,0 +1,25 @@
+title: Successful Sign-In Of The Delivery Account
+id: 6f1d2c3b-8a4e-4f5d-9b6c-7d8e9f0a1b2c
+status: test
+description: The shared delivery account signed in successfully from outside Earth.
+author: Hermes Conrad
+date: 2026-11-07
+tags:
+    - attack.initial-access
+    - attack.t1078
+    - attack.t1078.004
+logsource:
+    product: vault
+    service: signin_attempts
+detection:
+    selection:
+        target_user.email: "fry@planet-express.local"
+        category: success
+    filter_earth:
+        country: "Earth"
+    filter_robot:
+        delivered.by: "Bender"
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Fry ordering pizza from the moon
+level: informational

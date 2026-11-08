@@ -1,0 +1,6 @@
+# pySigma backends tested with the pySigma version droid pins. Unpinned, the
+# latest releases of some backends require a newer pySigma and upgrade it,
+# breaking the others.
+pysigma-backend-splunk==2.1.0
+pysigma-backend-kusto==1.0.1
+pysigma-backend-elasticsearch==2.1.1

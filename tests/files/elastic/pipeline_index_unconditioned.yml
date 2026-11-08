@@ -1,0 +1,9 @@
+name: Vault index for every rule
+priority: 90
+
+transformations:
+
+- id: index_set_state
+  type: set_state
+  key: "index"
+  val: "logs-vault-*"

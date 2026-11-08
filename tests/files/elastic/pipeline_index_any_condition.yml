@@ -1,0 +1,17 @@
+name: Vault index for two services
+priority: 90
+
+transformations:
+
+- id: index_set_state
+  type: set_state
+  key: "index"
+  val: "logs-vault-*"
+  rule_cond_op: or
+  rule_conditions:
+    - type: logsource
+      product: vault
+      service: signin_attempts
+    - type: logsource
+      product: vault
+      service: item_usages

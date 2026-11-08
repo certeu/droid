@@ -1,0 +1,37 @@
+# This is a TOML document config
+
+title = "droid configuration file"
+
+[base]
+
+sigma_rules_directory = "sigma-rules"
+raw_rules_directory = "rules-raw"
+
+[platforms]
+
+[platforms.elastic]
+
+auth_method = "basic"
+kibana_url = "https://kibana.planet-express.local"
+elastic_hosts = ["https://elastic.planet-express.local:9200"]
+elastic_tls_verify = true
+schedule_interval = 5
+schedule_interval_unit = "m"
+license = "DRL"
+alert_prefix = "PIZZA"
+
+[platforms.elastic.pipelines.vault_signin_attempts]
+
+pipelines = ["tests/files/elastic/pipeline_signin_attempts.yml"]
+pipelines_correlation = [
+    "tests/files/elastic/pipeline_signin_attempts.yml",
+    "tests/files/elastic/pipeline_signin_attempts_correlation.yml",
+]
+product = "vault"
+service = "signin_attempts"
+
+[platforms.elastic.pipelines.windows_process_creation]
+
+pipelines = ["tests/files/elastic/pipeline_process_creation.yml"]
+product = "windows"
+category = "process_creation"
