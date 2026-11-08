@@ -268,6 +268,37 @@ def test_a_rule_without_actions_clears_them(platform, pushed):
     assert actions["isolateDevices"] == [] and automated_actions(pushed[0]) == {}
 
 
+@pytest.mark.parametrize(
+    "action, expected",
+    [
+        ({"action": "disableUser", "identifier": "onPremSid"}, {"disableUsers": [{"accountSidColumn": "OnPremSid"}]}),
+        (
+            {"action": "forceUserPasswordReset", "identifier": "requestAccountSid"},
+            {"forceUserPasswordResets": [{"accountSidColumn": "RequestAccountSid"}]},
+        ),
+        (
+            {"action": "markUserAsCompromised", "identifier": "servicePrincipalId"},
+            {"markUsersAsCompromised": [{"accountObjectIdColumn": "ServicePrincipalId"}]},
+        ),
+        (
+            {"action": "markUserAsCompromised", "identifier": "recipientObjectId"},
+            {"markUsersAsCompromised": [{"accountObjectIdColumn": "RecipientObjectId"}]},
+        ),
+        (
+            {"action": "stopAndQuarantineFile", "identifier": ["deviceId", "sha1"]},
+            {"stopAndQuarantineFiles": [{"deviceIdColumn": "DeviceId", "sha1Column": "SHA1"}]},
+        ),
+    ],
+    ids=["onPremSid", "requestAccountSid", "servicePrincipalId", "recipientObjectId", "deviceId"],
+)
+def test_every_identifier_the_removed_response_actions_took_still_deploys(platform, action, expected):
+    """Rules written for responseActions must not break on upgrade"""
+
+    actions = platform.parse_actions([action], rule_file=RULE_FILE)
+
+    assert {collection: entries for collection, entries in actions.items() if entries} == expected
+
+
 def test_an_unknown_action_is_skipped(platform, pushed):
     custom = {"actions": [{"action": "launchNibbler"}, {"action": "runAntivirusScan"}]}
 
@@ -359,6 +390,34 @@ def test_automated_actions_as_graph_returns_them_are_unchanged(platform, build_p
     actions["@odata.type"] = "#microsoft.graph.security.automatedActionSet"
     actions["hardDeleteEmails"] = []
     actions["isolateDevices"][0]["@odata.type"] = "#microsoft.graph.security.isolateDeviceAction"
+
+    assert platform.rule_differences(deployed, payload) == []
+
+
+def test_an_email_action_set_on_the_portal_is_not_a_change(platform, build_payload):
+    """droid has no custom.actions for the email actions: one set on the
+    portal must not have every export update the rule."""
+
+    payload = build_payload()
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["automatedActions"]["softDeleteEmails"] = [
+        {"networkMessageIdColumn": "NetworkMessageId", "recipientColumn": "RecipientEmailAddress"}
+    ]
+
+    assert platform.rule_differences(deployed, payload) == []
+
+
+def test_entity_mappings_annotated_by_graph_are_unchanged(platform, build_payload):
+    custom = {
+        "xdr_entity_mappings": [
+            {"entity_type": "hosts", "field_mappings": [{"identifier": "deviceIdColumn", "column_name": "DeviceId"}]}
+        ]
+    }
+    payload = build_payload(build_rule_content(custom))
+    deployed = deployed_rule(payload)
+    mappings = deployed["detectionAction"]["alertTemplate"]["entityMappings"]
+    mappings["@odata.type"] = "#microsoft.graph.security.entityMappingConfiguration"
+    mappings["hosts"][0]["@odata.type"] = "#microsoft.graph.security.hostEntityMapping"
 
     assert platform.rule_differences(deployed, payload) == []
 

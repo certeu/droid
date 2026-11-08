@@ -67,12 +67,14 @@ MITRE_TACTICS = {
 }
 
 # custom.actions action names, the automatedActions collection each one fills,
-# and the identifiers it accepts
+# and the identifiers it accepts: every one the removed responseActions did
+ACCOUNT_SID_IDENTIFIERS = ["accountSid", "initiatingProcessAccountSid", "requestAccountSid", "onPremSid"]
+ACCOUNT_OBJECT_ID_IDENTIFIERS = ["accountObjectId", "initiatingProcessAccountObjectId", "servicePrincipalId", "recipientObjectId"]
 AUTOMATED_ACTIONS = {
-    "forceUserPasswordReset": ("forceUserPasswordResets", ["accountSid", "initiatingProcessAccountSid"]),
-    "disableUser": ("disableUsers", ["accountSid", "initiatingProcessAccountSid"]),
-    "markUserAsCompromised": ("markUsersAsCompromised", ["accountObjectId", "initiatingProcessAccountObjectId"]),
-    "stopAndQuarantineFile": ("stopAndQuarantineFiles", ["sha1", "initiatingProcessSHA1"]),
+    "forceUserPasswordReset": ("forceUserPasswordResets", ACCOUNT_SID_IDENTIFIERS),
+    "disableUser": ("disableUsers", ACCOUNT_SID_IDENTIFIERS),
+    "markUserAsCompromised": ("markUsersAsCompromised", ACCOUNT_OBJECT_ID_IDENTIFIERS),
+    "stopAndQuarantineFile": ("stopAndQuarantineFiles", ["sha1", "initiatingProcessSHA1", "deviceId"]),
     "blockFile": ("blockFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
     "allowFile": ("allowFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
     "restrictAppExecution": ("restrictAppExecutions", ["deviceId"]),
@@ -88,8 +90,12 @@ IDENTIFIER_COLUMNS = {
     "deviceId": ("deviceIdColumn", "DeviceId"),
     "accountSid": ("accountSidColumn", "AccountSid"),
     "initiatingProcessAccountSid": ("accountSidColumn", "InitiatingProcessAccountSid"),
+    "requestAccountSid": ("accountSidColumn", "RequestAccountSid"),
+    "onPremSid": ("accountSidColumn", "OnPremSid"),
     "accountObjectId": ("accountObjectIdColumn", "AccountObjectId"),
     "initiatingProcessAccountObjectId": ("accountObjectIdColumn", "InitiatingProcessAccountObjectId"),
+    "servicePrincipalId": ("accountObjectIdColumn", "ServicePrincipalId"),
+    "recipientObjectId": ("accountObjectIdColumn", "RecipientObjectId"),
     "sha1": ("sha1Column", "SHA1"),
     "initiatingProcessSHA1": ("sha1Column", "InitiatingProcessSHA1"),
     "sha256": ("sha256Column", "SHA256"),
@@ -130,11 +136,16 @@ def _tactic_triples(tactics):
 
 
 def _automated_action_set(automated_actions):
-    """Reduce automatedActions to its non-empty actions, ignoring order and the
-    empty collections and @odata annotations Graph returns"""
+    """Reduce automatedActions to the non-empty actions droid manages, ignoring
+    order and the empty collections and @odata annotations Graph returns
+
+    The collections droid has no custom.actions for, the email actions, are
+    left out: one set on the portal would otherwise differ on every export.
+    """
+    managed = {collection for collection, _ in AUTOMATED_ACTIONS.values()}
     reduced = {}
     for collection, entries in (automated_actions or {}).items():
-        if collection.startswith("@odata") or not entries:
+        if collection not in managed or not isinstance(entries, list) or not entries:
             continue
         reduced[collection] = sorted(
             tuple(sorted(
@@ -997,14 +1008,17 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Reduce an entityMappingConfiguration to its non-empty
         # (category, column, value) triples, so a payload that only lists the
         # mapped columns compares equal to the service response that fills
-        # every category and column with empty strings.
+        # every category and column with empty strings. @odata annotations
+        # Graph may add are not mappings, and would otherwise differ forever.
         triples = set()
         if not entity_mappings:
             return triples
         for category, entries in entity_mappings.items():
+            if category.startswith("@odata") or not isinstance(entries, list):
+                continue
             for entry in entries:
                 for column, value in entry.items():
-                    if value:
+                    if value and not column.startswith("@odata"):
                         triples.add((category, column, value))
         return triples
 
