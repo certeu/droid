@@ -30,11 +30,11 @@ def build_rule_content(removed=False, description="A rule"):
     return rule_content
 
 
-def build_xdr_rule(query="the deployed query", description="A rule", enabled=True):
+def build_xdr_rule(query="the deployed query", description="A rule", status="enabled"):
     return {
         "queryCondition": {"queryText": query},
         "detectionAction": {"alertTemplate": {"description": description}},
-        "isEnabled": enabled,
+        "status": status,
     }
 
 
@@ -128,6 +128,20 @@ def test_xdr_rule_matching_the_platform():
     error = run_integrity(platform, build_rule_content(), "the new query")
     assert not error
 
+
+def test_xdr_rule_auto_disabled_on_the_platform():
+    """Microsoft turns off a rule that keeps failing: it no longer detects
+    anything, which integrity must report."""
+
+    platform = FakeXDRPlatform({None: build_xdr_rule(query="the new query", status="autoDisabled")})
+    assert run_integrity(platform, build_rule_content(), "the new query")
+
+
+def test_xdr_rule_disabled_as_expected():
+    platform = FakeXDRPlatform({None: build_xdr_rule(query="the new query", status="disabled")})
+    rule_content = build_rule_content()
+    rule_content["custom"] = {"disabled": True}
+    assert not run_integrity(platform, rule_content, "the new query")
 
 def test_xdr_mssp_removed_rule_still_on_the_platform():
     """A removed rule not yet deleted on one tenant is not an integrity error"""

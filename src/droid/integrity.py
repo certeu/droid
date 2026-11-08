@@ -322,15 +322,19 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
     # Check if disabled
     is_disabled = rule_content.get("custom", {}).get("disabled")
 
-    if is_disabled and not saved_search["isEnabled"]:
+    # Microsoft removed isEnabled for status, which can also be autoDisabled:
+    # a rule turned off after repeated failures, which is not enabled
+    is_enabled = saved_search.get("status") == "enabled"
+
+    if is_disabled and not is_enabled:
         logger.info("The rule is disabled as expected")
-    elif is_disabled and saved_search["isEnabled"]:
+    elif is_disabled and is_enabled:
         logger.error("The rule is not disabled on the platform")
         error = True
-    elif is_disabled is None and not saved_search["isEnabled"]:
-        logger.error("The rule is not enabled on the platform")
+    elif is_disabled is None and not is_enabled:
+        logger.error(f"The rule is not enabled on the platform (status: {saved_search.get('status')})")
         error = True
-    elif is_disabled is None and saved_search["isEnabled"]:
+    elif is_disabled is None and is_enabled:
         logger.info("The rule is enabled as expected")
 
     if error:
