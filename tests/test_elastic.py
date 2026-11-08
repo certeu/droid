@@ -612,8 +612,15 @@ ACTIONS = {
         "connector_id": "planet-express-smtp",
         "to": ["leela@planet-express.local"],
         "cc": ["hermes@planet-express.local"],
+        "overridable": ["to", "subject"],
+        "allowed_recipient_domains": ["planet-express.local"],
     },
-    "dispatch_webhook": {"type": "webhook", "connector_id": "planet-express-dispatch", "throttle": "1h"},
+    "dispatch_webhook": {
+        "type": "webhook",
+        "connector_id": "planet-express-dispatch",
+        "throttle": "1h",
+        "overridable": ["throttle", "per_alert", "connector_id"],
+    },
     "kitchen_log": {"type": "server_log", "connector_id": "planet-express-log", "level": "warn"},
 }
 
@@ -1123,6 +1130,15 @@ def test_rule_override_can_change_the_frequency():
         ({"dispatch_email": {"recipients": ["fry"]}}, "recipients"),
         ({"dispatch_email": {"connector_id": "elsewhere"}}, "connector_id"),
         ({"dispatch_email": ["fry"]}, "dispatch_email"),
+        ({"dispatch_webhook": {"type": "email"}}, "type"),
+        # The action only lets rules override to and subject
+        ({"dispatch_email": {"cc": ["nibbler@planet-express.local"]}}, "cc"),
+        ({"dispatch_email": {"message": "Hypnotoad"}}, "message"),
+        # Overridden recipients must stay within the allowed domains
+        ({"dispatch_email": {"to": ["mom@momcorp.example"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": ["leela@planet-express.local", "zapp@doop.example"]}}, "doop.example"),
+        ({"dispatch_email": {"to": ["spy@evil.planet-express.local.example"]}}, "planet-express.local.example"),
+        ({"dispatch_email": {"to": ["no-domain"]}}, "no-domain"),
     ],
 )
 def test_invalid_rule_override_fails_the_export_of_that_rule(override, error):
@@ -1130,6 +1146,76 @@ def test_invalid_rule_override_fails_the_export_of_that_rule(override, error):
 
     with pytest.raises(ValueError, match=error):
         export(build_platform(actions=ACTIONS), rule)
+
+
+def test_action_lets_rules_override_nothing_by_default():
+    """Rule files are open to more people than the config: an action only
+    lets rules change what the config allows"""
+    actions = {"dispatch_email": {
+        "type": "email", "connector_id": "planet-express-smtp", "to": ["leela@planet-express.local"],
+    }}
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"to": ["fry@planet-express.local"]}}}}
+
+    with pytest.raises(ValueError, match="overridable"):
+        export(build_platform(actions=actions), rule)
+
+
+def test_rule_selects_actions_by_name_without_overriding_anything():
+    """Selecting is not overriding: it needs no overridable parameter"""
+    actions = {"dispatch_email": {
+        "type": "email", "connector_id": "planet-express-smtp", "to": ["leela@planet-express.local"],
+    }}
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": None}}}
+
+    assert list(actions_of(export(build_platform(actions=actions), rule))) == ["planet-express-smtp"]
+
+
+def test_allowed_recipient_domains_only_bind_the_rules():
+    """The admin may send the configured mail outside, a rule may not"""
+    actions = {"dispatch_email": {
+        "type": "email", "connector_id": "planet-express-smtp", "to": ["mom@momcorp.example"],
+        "overridable": ["to"], "allowed_recipient_domains": ["planet-express.local"],
+    }}
+
+    action = actions_of(export(build_platform(actions=actions)))["planet-express-smtp"]
+
+    assert action["params"]["to"] == ["mom@momcorp.example"]
+
+
+def test_recipient_domains_are_matched_whatever_their_case():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"to": ["Fry@Planet-Express.LOCAL"]}}}}
+
+    action = actions_of(export(build_platform(actions=ACTIONS), rule))["planet-express-smtp"]
+
+    assert action["params"]["to"] == ["Fry@Planet-Express.LOCAL"]
+
+
+def test_rule_points_its_webhook_at_another_connector():
+    """Splunk sets the webhook URL per rule; on Kibana the URL is the
+    connector's, so a rule picks another webhook connector"""
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_webhook": {"connector_id": "momcorp-dispatch"}}}}
+
+    actions = actions_of(export(build_platform(actions=ACTIONS), rule))
+
+    assert list(actions) == ["momcorp-dispatch"]
+    assert actions["momcorp-dispatch"]["action_type_id"] == ".webhook"
+    assert actions["momcorp-dispatch"]["frequency"]["throttle"] == "1h"
+
+
+@pytest.mark.parametrize(
+    "action, error",
+    [
+        ({"type": "webhook", "connector_id": "c", "overridable": ["url"]}, "url"),
+        ({"type": "webhook", "connector_id": "c", "overridable": ["type"]}, "type"),
+        ({"type": "webhook", "connector_id": "c", "overridable": "body"}, "overridable"),
+        ({"type": "webhook", "connector_id": "c", "allowed_recipient_domains": ["planet-express.local"]}, "email"),
+        ({"type": "email", "connector_id": "c", "to": ["a@b.c"], "allowed_recipient_domains": "b.c"}, "allowed_recipient_domains"),
+        ({"type": "email", "connector_id": "c", "to": ["a@b.c"], "allowed_recipient_domains": ["@b.c"]}, "@b.c"),
+    ],
+)
+def test_invalid_override_policy_is_rejected(action, error):
+    with pytest.raises(ValueError, match=error):
+        build_platform(actions={"broken": action})
 
 
 # ---------------------------------------------------------------------------

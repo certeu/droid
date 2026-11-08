@@ -128,6 +128,9 @@ ACTION_TYPES = {
     },
 }
 SERVER_LOG_LEVELS = ("trace", "debug", "info", "warn", "error", "fatal")
+# What a rule may override of an action, once the action lists it
+ACTION_FREQUENCY_PARAMS = ("per_alert", "throttle")
+RECIPIENT_PARAMS = ("to", "cc", "bcc")
 
 # Kibana alert suppression: one alert per group of field values, for a
 # duration or for each rule execution. Needs a Platinum license.
@@ -385,6 +388,9 @@ class ElasticPlatform(AbstractPlatform):
         )
 
         self._action_configs = dict(self._parameters.get("actions") or {})
+        self._action_policies = {
+            name: self.action_policy(name, action) for name, action in self._action_configs.items()
+        }
         self._actions = {name: self.build_action(name, action) for name, action in self._action_configs.items()}
 
         # Alert suppression needs a Platinum license
@@ -725,10 +731,48 @@ class ElasticPlatform(AbstractPlatform):
         return f"{source} {clause}{rest}"
 
     @staticmethod
+    def action_policy(name, action):
+        """Validate what rules may override of an action
+
+        Rule files are open to more people than the config: a rule only
+        overrides the parameters its action lists in `overridable`, nothing by
+        default, and the recipients it gives an email action must belong to the
+        `allowed_recipient_domains` when set.
+
+        Return: (the overridable parameters, the allowed recipient domains or None)
+        """
+
+        action_type = ACTION_TYPES.get(action.get("type"))
+        overridable = action.get("overridable", [])
+        if not isinstance(overridable, list):
+            raise ValueError(f"ElasticPlatform: action '{name}' must list its overridable parameters")
+        if action_type:
+            allowed = set(action_type["params"]) | set(ACTION_FREQUENCY_PARAMS) | {"connector_id"}
+            invalid = [param for param in overridable if param not in allowed]
+            if invalid:
+                raise ValueError(
+                    f"ElasticPlatform: action '{name}' cannot let rules override {', '.join(map(str, invalid))}, "
+                    f"expected among {', '.join(sorted(allowed))}"
+                )
+
+        domains = action.get("allowed_recipient_domains")
+        if domains is not None:
+            if action.get("type") != "email":
+                raise ValueError(f"ElasticPlatform: action '{name}': allowed_recipient_domains only applies to email actions")
+            if not isinstance(domains, list) or not domains:
+                raise ValueError(f"ElasticPlatform: action '{name}' must list its allowed_recipient_domains")
+            invalid = [domain for domain in domains if not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z0-9-]+", str(domain))]
+            if invalid:
+                raise ValueError(f"ElasticPlatform: action '{name}' has invalid allowed_recipient_domains {', '.join(map(str, invalid))}")
+            domains = [domain.lower() for domain in domains]
+
+        return set(overridable), domains
+
+    @staticmethod
     def build_action(name, action):
         """Build the Kibana rule action of an `actions` entry of the config"""
 
-        action = dict(action)
+        action = {key: value for key, value in action.items() if key not in ("overridable", "allowed_recipient_domains")}
         action_type = ACTION_TYPES.get(action.pop("type", None))
         if action_type is None:
             raise ValueError(f"ElasticPlatform: action '{name}' needs a type among {', '.join(ACTION_TYPES)}")
@@ -802,10 +846,26 @@ class ElasticPlatform(AbstractPlatform):
                 continue
             if not isinstance(override, dict):
                 raise ValueError(f"custom.elastic_actions: the override of '{name}' must be a mapping of parameters")
-            if "type" in override or "connector_id" in override:
+            if "type" in override:
+                raise ValueError(f"custom.elastic_actions: the override of '{name}' cannot change its type")
+
+            overridable, domains = self._action_policies[name]
+            refused = sorted(set(override) - overridable)
+            if refused:
                 raise ValueError(
-                    f"custom.elastic_actions: the override of '{name}' cannot change its type or connector_id"
+                    f"custom.elastic_actions: action '{name}' does not let rules override {', '.join(refused)}, "
+                    f"its overridable parameters are: {', '.join(sorted(overridable)) or 'none'}"
                 )
+            if domains is not None:
+                for param in RECIPIENT_PARAMS:
+                    for recipient in override.get(param) or []:
+                        domain = str(recipient).rpartition("@")[2].lower() if "@" in str(recipient) else None
+                        if domain not in domains:
+                            raise ValueError(
+                                f"custom.elastic_actions: action '{name}' only sends to {', '.join(domains)}, "
+                                f"not to {recipient}"
+                            )
+
             config = {**self._action_configs[name], **override}
             # A throttle cleared by the rule is no throttle at all
             if config.get("throttle", 0) is None:
