@@ -7,6 +7,7 @@ import pytest
 from types import SimpleNamespace
 
 from droid.integrity import integrity_rule
+from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 
 LOGGER_PARAM = {
     "debug_mode": False,
@@ -23,6 +24,8 @@ def build_rule_content(removed=False, description="A rule"):
         "id": RULE_ID,
         "title": "A rule",
         "description": description,
+        "level": "medium",
+        "tags": ["attack.execution", "attack.t1059.001"],
         "detection": {},
     }
     if removed:
@@ -30,28 +33,36 @@ def build_rule_content(removed=False, description="A rule"):
     return rule_content
 
 
-def build_xdr_rule(query="the deployed query", description="A rule", status="enabled"):
-    return {
-        "queryCondition": {"queryText": query},
-        "detectionAction": {"alertTemplate": {"description": description}},
-        "status": status,
-    }
+XDR_PARAMETERS = {
+    "query_period": "1h",
+    "tenant_id": "tenant-planet-express",
+    "search_auth": "default",
+    "export_auth": "default",
+}
 
 
-class FakeXDRPlatform:
-    """Minimal stand-in for MicrosoftXDRPlatform"""
+class FakeXDRPlatform(MicrosoftXDRPlatform):
+    """MicrosoftXDRPlatform building and comparing rules for real, its Graph calls stubbed"""
 
     def __init__(self, rules=None, export_list=None):
+        super().__init__(dict(XDR_PARAMETERS), LOGGER_PARAM)
         # rules: {tenant_id or None: saved_search or None}
         self._rules = rules if rules is not None else {}
         self._export_list = export_list or {}
-        self._convert_rule_callback = None
 
     def get_rule(self, rule_id, tenant_id=None):
         return self._rules.get(tenant_id)
 
     def get_export_list_mssp(self):
         return self._export_list
+
+
+def build_xdr_rule(query="the deployed query", description="A rule", status="enabled", rule_content=None):
+    """The rule as Graph returns it once export deployed it"""
+    rule = FakeXDRPlatform().build_alert_rule(rule_content or build_rule_content(description=description), query, "a_rule.yml")
+    rule.update(id="1255", status=status, createdBy="hermes@planet-express.local")
+    rule["detectionAction"]["alertTemplate"]["recommendedActions"] = ""
+    return rule
 
 
 class FakeSplunkPlatform:
@@ -142,6 +153,49 @@ def test_xdr_rule_disabled_as_expected():
     rule_content = build_rule_content()
     rule_content["custom"] = {"disabled": True}
     assert not run_integrity(platform, rule_content, "the new query")
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        lambda rule: rule["schedule"].update(frequency="P1D"),
+        lambda rule: rule["detectionAction"]["alertTemplate"].update(severity="low"),
+        lambda rule: rule["detectionAction"]["alertTemplate"].update(title="A rule, edited on the portal"),
+        lambda rule: rule["detectionAction"]["alertTemplate"].update(tactics=[]),
+        lambda rule: rule["detectionAction"]["automatedActions"].update(isolateDevices=[{"deviceIdColumn": "DeviceId"}]),
+        lambda rule: rule.update(displayName="A rule"),
+    ],
+    ids=["frequency", "severity", "title", "tactics", "actions", "display-name"],
+)
+def test_xdr_rule_drifting_from_export_on_any_setting(drift):
+    """Integrity checks every setting export deploys, not only the query"""
+    deployed = build_xdr_rule(query="the new query")
+    drift(deployed)
+    platform = FakeXDRPlatform({None: deployed})
+    assert run_integrity(platform, build_rule_content(), "the new query")
+
+
+def test_xdr_rule_with_entity_mappings_matching_the_platform():
+    rule_content = build_rule_content()
+    rule_content["custom"] = {
+        "xdr_entity_mappings": [
+            {"entity_type": "hosts", "field_mappings": [{"identifier": "deviceIdColumn", "column_name": "DeviceId"}]}
+        ]
+    }
+    deployed = build_xdr_rule(query="the new query", rule_content=rule_content)
+    # Graph fills in every column of an entity, unset ones empty
+    deployed["detectionAction"]["alertTemplate"]["entityMappings"]["hosts"][0]["nameColumn"] = ""
+    platform = FakeXDRPlatform({None: deployed})
+    assert not run_integrity(platform, rule_content, "the new query")
+
+
+def test_xdr_rule_that_cannot_be_built_is_an_integrity_error():
+    """A rule export would refuse cannot match the platform"""
+    rule_content = build_rule_content()
+    platform = FakeXDRPlatform({None: build_xdr_rule(query="the new query")})
+    rule_content["custom"] = {"query_period": "2H"}
+    assert run_integrity(platform, rule_content, "the new query")
+
 
 def test_xdr_mssp_removed_rule_still_on_the_platform():
     """A removed rule not yet deleted on one tenant is not an integrity error"""

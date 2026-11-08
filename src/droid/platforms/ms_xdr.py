@@ -483,9 +483,11 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self.logger.error(message)
         raise ValueError(message)
 
-    def create_rule(self, rule_content, rule_converted, rule_file):
-        """
-        Create an Custom Detection Rule in Microsoft XDR
+    def build_alert_rule(self, rule_content, rule_converted, rule_file):
+        """Build the detection rule droid deploys for a rule
+
+        Export pushes it, and integrity compares it with the deployed rule, so
+        that both agree on what the rule should be.
         """
 
         # Handling the display name
@@ -503,7 +505,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
 
         if rule_content.get("custom", {}).get("disabled") is True:
             status = "disabled"
-            self.logger.info(f"Disabling the rule {rule_file}")
+            self.logger.debug(f"Disabling the rule {rule_file}")
         else:
             status = "enabled"
 
@@ -513,27 +515,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             severity = rule_content["level"]
         tactics = self.build_tactics(rule_content, rule_file)
-        try:
-            alert_rule = {
-                # Graph v1.0 has the client name a rule it creates
-                "id": rule_content["id"],
-                "displayName": display_name,
-                "status": status,
-                "queryCondition": {"queryText": rule_converted},
-                "detectionAction": {
-                    "alertTemplate": {
-                        "title": alert_title,
-                        "description": rule_content["description"],
-                        "severity": severity,
-                        "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                        "tactics": tactics,
-                    },
-                    "organizationalScope": None,  # TODO: Find out what this does
-                    "automatedActions": self.parse_actions([], rule_file=rule_file),
+        alert_rule = {
+            # Graph v1.0 has the client name a rule it creates
+            "id": rule_content["id"],
+            "displayName": display_name,
+            "status": status,
+            "queryCondition": {"queryText": rule_converted},
+            "detectionAction": {
+                "alertTemplate": {
+                    "title": alert_title,
+                    "description": rule_content["description"],
+                    "severity": severity,
+                    "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
+                    "tactics": tactics,
                 },
-            }
-        except Exception as e:
-            self.logger.error(e)
+                "organizationalScope": None,  # TODO: Find out what this does
+                "automatedActions": self.parse_actions([], rule_file=rule_file),
+            },
+        }
 
         # The rule overrides its group, which overrides the configuration. Only
         # the value that wins is translated, so a configuration default with no
@@ -571,6 +570,15 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 alert_rule["detectionAction"]["alertTemplate"][
                     "entityMappings"
                 ] = entityMappings
+
+        return alert_rule
+
+    def create_rule(self, rule_content, rule_converted, rule_file):
+        """
+        Create an Custom Detection Rule in Microsoft XDR
+        """
+
+        alert_rule = self.build_alert_rule(rule_content, rule_converted, rule_file)
 
         if self._export_mssp:
             if self._export_list_mssp:

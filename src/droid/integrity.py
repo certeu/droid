@@ -298,44 +298,23 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
 
     logger.info(f"Successfully retrieved the rule {rule_file}")
 
-    result = {
-        "description": saved_search["detectionAction"]["alertTemplate"]["description"],
-        "query": saved_search["queryCondition"]["queryText"]
-    }
+    # Compare every setting export deploys, through the comparison export
+    # itself uses to decide whether a rule needs an update
+    try:
+        expected_rule = platform.build_alert_rule(rule_content, rule_converted, rule_file)
+    except Exception as e:
+        logger.error(f"Couldn't build the rule {rule_file} to check its integrity - error {e}")
+        return True
 
-    rule_content["detection"] = rule_converted
-
-    mapping = {
-        "detection": "query",
-        "description": "description"
-    }
-    for key in mapping:
-        rule_key = key
-        result_key = mapping[key]
-
-        if rule_content.get(rule_key) == result.get(result_key):
-            logger.debug(f"{rule_key} in rule_content matches {result_key} in result")
-        else:
-            logger.error(f"{rule_key} in rule_content does not match {result_key} in result")
-            error = True
-
-    # Check if disabled
-    is_disabled = rule_content.get("custom", {}).get("disabled")
-
-    # Microsoft removed isEnabled for status, which can also be autoDisabled:
-    # a rule turned off after repeated failures, which is not enabled
-    is_enabled = saved_search.get("status") == "enabled"
-
-    if is_disabled and not is_enabled:
-        logger.info("The rule is disabled as expected")
-    elif is_disabled and is_enabled:
-        logger.error("The rule is not disabled on the platform")
+    for difference in platform.rule_differences(saved_search, expected_rule):
+        logger.error(f"The {difference} of the rule {rule_file} does not match the platform")
         error = True
-    elif is_disabled is None and not is_enabled:
-        logger.error(f"The rule is not enabled on the platform (status: {saved_search.get('status')})")
+
+    # Export leaves a rule Microsoft auto-disabled alone, and so does the
+    # comparison, but the rule is not running: integrity reports it
+    if saved_search.get("status") == "autoDisabled" and expected_rule["status"] == "enabled":
+        logger.error(f"The rule {rule_file} was auto-disabled by Microsoft XDR after repeated failures")
         error = True
-    elif is_disabled is None and is_enabled:
-        logger.info("The rule is enabled as expected")
 
     if error:
         return error
