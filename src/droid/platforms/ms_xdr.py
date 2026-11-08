@@ -2,6 +2,7 @@
 Module for Microsoft XDR
 """
 
+import copy
 import re
 import requests
 import time
@@ -102,13 +103,17 @@ IDENTIFIER_COLUMNS = {
     "initiatingProcessSHA256": ("sha256Column", "InitiatingProcessSHA256"),
 }
 
-# Sets the schedule.frequency a continuous query_period ("0") is deployed with,
-# to try values on a tenant until Graph documents one
-CONTINUOUS_FREQUENCY_VARIABLE = "DROID_XDR_CONTINUOUS_FREQUENCY"
+# The entities of a rule without custom.xdr_entity_mappings. Microsoft does not
+# derive any: a rule without them has its alerts grouped into incidents
+# poorly. The device is what droid mapped by default with impactedAssets.
+DEFAULT_ENTITY_MAPPINGS = {"hosts": [{"deviceIdColumn": "DeviceId"}]}
 
 # query_period values droid accepts, the ones of the schedule.period Microsoft
 # removed, and the schedule.frequency replacing each of them
 QUERY_PERIOD_FREQUENCIES = {
+    # Continuous (near real-time): undocumented, confirmed on a tenant, where a
+    # rule deployed with it shows as NRT
+    "0": "PT0S",
     "1H": "PT1H",
     "3H": "PT3H",
     "12H": "PT12H",
@@ -179,7 +184,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             raise Exception('MicrosoftXDRPlatform: "query_period" parameter is required.')
         else:
             self._query_period = self._parameters["query_period"]
-        self._warn_about_continuous_query_periods()
         if "auth_cert" in self._parameters:
             self._auth_cert = self._parameters["auth_cert"]
         else:
@@ -223,26 +227,6 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         self._token_cache = {}
         # Monotonic deadline per tenant while a throttling window is known to be open
         self._throttled_until = {}
-
-    def _warn_about_continuous_query_periods(self):
-        """Say once, when droid starts, that a continuous query_period no longer deploys
-
-        Every rule it applies to fails to export, each with its own error deep
-        in the log: a configuration written for the removed schedule.period
-        deserves one warning up front naming the setting to change.
-        """
-        continuous = []
-        if str(self._query_period) == "0":
-            continuous.append("query_period")
-        for group, settings in (self._query_period_groups or {}).items():
-            if str(settings.get("query_period")) == "0":
-                continuous.append(f"query_period_groups.{group}")
-        if continuous and not environ.get(CONTINUOUS_FREQUENCY_VARIABLE):
-            self.logger.warning(
-                f"Breaking change: the continuous query_period '0', set in {', '.join(continuous)}, "
-                "has no documented equivalent in the Graph API custom detection rules. Rules "
-                f"using it will fail to export: set one of {list(QUERY_PERIOD_FREQUENCIES)} instead"
-            )
 
     def set_convert_rule_callback(self, callback: Callable) -> None:
         """Set the callback function for converting rules with customer-specific filters
@@ -485,24 +469,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         query_period = str(query_period).upper()
         if query_period in QUERY_PERIOD_FREQUENCIES:
             return QUERY_PERIOD_FREQUENCIES[query_period]
-        if query_period == "0":
-            # TODO: Graph documents no frequency for a continuous (NRT) rule.
-            # Refused until the value is confirmed against a tenant, rather than
-            # guessing one and deploying a rule that runs on another schedule.
-            # The environment variable lets that value be tried on a tenant.
-            continuous_frequency = environ.get(CONTINUOUS_FREQUENCY_VARIABLE)
-            if continuous_frequency:
-                self.logger.warning(
-                    f"Deploying the continuous query_period of {rule_file} with the untested frequency "
-                    f"'{continuous_frequency}' from {CONTINUOUS_FREQUENCY_VARIABLE}"
-                )
-                return continuous_frequency
-            message = (
-                "query_period '0' (continuous) has no documented equivalent in the Graph "
-                f"schedule.frequency, use one of {list(QUERY_PERIOD_FREQUENCIES)} - {rule_file}"
-            )
-        else:
-            message = f"query_period must be one of {list(QUERY_PERIOD_FREQUENCIES)}, got '{query_period}' - {rule_file}"
+        message = f"query_period must be one of {list(QUERY_PERIOD_FREQUENCIES)}, got '{query_period}' - {rule_file}"
         self.logger.error(message)
         raise ValueError(message)
 
@@ -551,6 +518,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     "severity": severity,
                     "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                     "tactics": tactics,
+                    "entityMappings": copy.deepcopy(DEFAULT_ENTITY_MAPPINGS),
                 },
                 "organizationalScope": None,  # TODO: Find out what this does
                 "automatedActions": self.parse_actions([], rule_file=rule_file),
@@ -772,18 +740,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             _automated_action_set(new_rule["detectionAction"]["automatedActions"]),
         )
 
-        # entityMappings is only part of the payload when the rule defines
-        # custom.xdr_entity_mappings; otherwise the service auto-derives it and
-        # a comparison would flag every rule as changed. The service fills
-        # every category and column, unset ones as empty strings, so both
-        # sides are reduced to their non-empty (category, column, value)
-        # triples before comparing.
-        new_mappings = new_template.get("entityMappings")
-        if new_mappings is not None:
-            compared["entityMappings"] = (
-                self._entity_mapping_triples(existing_template.get("entityMappings")),
-                self._entity_mapping_triples(new_mappings),
-            )
+        # The service fills every category and column, unset ones as empty
+        # strings, so both sides are reduced to their non-empty (category,
+        # column, value) triples before comparing.
+        compared["entityMappings"] = (
+            self._entity_mapping_triples(existing_template.get("entityMappings")),
+            self._entity_mapping_triples(new_template["entityMappings"]),
+        )
 
         differences = [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
         for field in differences:

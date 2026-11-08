@@ -105,7 +105,38 @@ def test_sentinel_entity_mappings_are_left_to_sentinel(platform, pushed):
 
     platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
 
-    assert "entityMappings" not in alert_template(pushed[0])
+    assert alert_template(pushed[0])["entityMappings"] == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+
+
+def test_a_rule_without_entity_mappings_maps_its_device(platform, pushed):
+    """Microsoft derives no entity: without one, alerts correlate into
+    incidents poorly. The device is what impactedAssets mapped by default."""
+
+    platform.create_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["entityMappings"] == {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+
+
+def test_entity_mappings_replace_the_default_device(platform, pushed):
+    custom = {
+        "xdr_entity_mappings": [
+            {"entity_type": "accounts", "field_mappings": [{"identifier": "upnColumn", "column_name": "AccountUpn"}]}
+        ]
+    }
+
+    platform.create_rule(build_rule_content(custom), "DeviceEvents", RULE_FILE)
+
+    assert alert_template(pushed[0])["entityMappings"] == {"accounts": [{"upnColumn": "AccountUpn"}]}
+
+
+def test_a_deployed_rule_without_entities_is_updated(platform, build_payload):
+    """Rules exported without entities must get the default device mapped"""
+
+    payload = build_payload()
+    deployed = deployed_rule(payload)
+    deployed["detectionAction"]["alertTemplate"]["entityMappings"] = {"hosts": [], "accounts": []}
+
+    assert platform.rule_differences(deployed, payload) == ["entityMappings"]
 
 
 def test_legacy_impacted_assets_are_no_longer_pushed(platform, pushed):
@@ -149,7 +180,7 @@ def test_a_disabled_rule_is_pushed_with_status_disabled(platform, pushed):
 
 @pytest.mark.parametrize(
     "query_period, frequency",
-    [("1h", "PT1H"), ("3H", "PT3H"), ("12H", "PT12H"), ("24H", "P1D")],
+    [("0", "PT0S"), ("1h", "PT1H"), ("3H", "PT3H"), ("12H", "PT12H"), ("24H", "P1D")],
 )
 def test_the_query_period_is_pushed_as_a_frequency(platform, pushed, query_period, frequency):
     platform.create_rule(build_rule_content({"query_period": query_period}), "DeviceEvents", RULE_FILE)
@@ -163,10 +194,7 @@ def test_the_configured_query_period_applies_by_default(platform, pushed):
     assert pushed[0]["schedule"] == {"frequency": "PT1H"}
 
 
-def test_a_rule_query_period_overrides_a_continuous_configuration(pushed, monkeypatch):
-    """Only the query_period that wins is translated: a continuous default
-    must not fail the rules that set their own."""
-
+def test_a_rule_query_period_overrides_the_configuration(pushed, monkeypatch):
     platform = MicrosoftXDRPlatform(dict(XDR_PARAMETERS, query_period="0"), LOGGER_PARAM)
     monkeypatch.setattr(platform, "push_detection_rule", lambda alert_rule=None, **kwargs: pushed.append(alert_rule))
 
@@ -175,30 +203,18 @@ def test_a_rule_query_period_overrides_a_continuous_configuration(pushed, monkey
     assert pushed[0]["schedule"] == {"frequency": "PT12H"}
 
 
-def test_a_continuous_frequency_can_be_tried_from_the_environment(platform, pushed, monkeypatch):
-    """Graph documents no frequency for a continuous rule: the value to try
-    on a tenant comes from the environment."""
-
-    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
+def test_a_continuous_rule_as_graph_returns_it_is_unchanged(platform, pushed):
+    """Graph may spell the zero duration of a continuous rule another way"""
 
     platform.create_rule(build_rule_content({"query_period": "0"}), "DeviceEvents", RULE_FILE)
+    deployed = copy.deepcopy(pushed[0])
+    deployed["schedule"] = {"frequency": "PT0M"}
 
-    assert pushed[0]["schedule"] == {"frequency": "PT0S"}
-
-
-def test_a_continuous_frequency_from_the_environment_is_compared_as_a_duration(platform, build_payload, monkeypatch):
-    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
-    payload = build_payload(build_rule_content({"query_period": "0"}))
-
-    deployed = deployed_rule(payload, schedule={"frequency": "PT0M"})
-
-    assert platform.rule_differences(deployed, payload) == []
+    assert platform.rule_differences(deployed, pushed[0]) == []
 
 
-@pytest.mark.parametrize("query_period", ["0", "2H", "PT1H"])
-def test_a_query_period_without_a_frequency_is_an_error(platform, pushed, query_period):
-    """Graph documents no frequency for a continuous rule, so droid refuses
-    one rather than deploying a rule that runs on another schedule."""
+@pytest.mark.parametrize("query_period", ["2H", "PT1H"])
+def test_an_unknown_query_period_is_an_error(platform, pushed, query_period):
 
     with pytest.raises(ValueError):
         platform.create_rule(build_rule_content({"query_period": query_period}), "DeviceEvents", RULE_FILE)
@@ -560,46 +576,3 @@ def test_an_update_does_not_change_the_rule_id(platform, build_payload, graph):
 
 def test_rules_are_managed_on_graph_v1(platform):
     assert platform._api_base_url == "https://graph.microsoft.com/v1.0"
-
-
-# Breaking changes
-
-
-@pytest.fixture
-def warnings(monkeypatch):
-    """ColorLogger sits outside the logging hierarchy, out of caplog's reach,
-    and these warnings come from the constructor, before an instance exists"""
-    recorded = []
-    monkeypatch.setattr(
-        "droid.platforms.ms_xdr.ColorLogger.warning",
-        lambda self, message, *args, **kwargs: recorded.append(message),
-    )
-    return recorded
-
-
-def test_a_continuous_configuration_is_warned_about_up_front(warnings):
-    """Every rule using it fails to export: say so once when droid starts."""
-
-    parameters = dict(XDR_PARAMETERS, query_period="0")
-    parameters["rule_parameters"] = {"query_period_groups": {"slurm_factory": {"query_period": "0"}}}
-
-    MicrosoftXDRPlatform(parameters, LOGGER_PARAM)
-
-    assert len(warnings) == 1
-    assert warnings[0].startswith(
-        "Breaking change: the continuous query_period '0', set in query_period, query_period_groups.slurm_factory,"
-    )
-
-
-def test_a_continuous_configuration_being_tried_is_not_warned_about(warnings, monkeypatch):
-    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
-
-    MicrosoftXDRPlatform(dict(XDR_PARAMETERS, query_period="0"), LOGGER_PARAM)
-
-    assert warnings == []
-
-
-def test_a_scheduled_configuration_is_not_warned_about(warnings):
-    MicrosoftXDRPlatform(dict(XDR_PARAMETERS), LOGGER_PARAM)
-
-    assert warnings == []
