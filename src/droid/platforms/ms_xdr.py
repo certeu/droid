@@ -48,6 +48,26 @@ THROTTLING_HEADERS = (
     "x-ms-resource-unit",
 )
 
+# query_period values droid accepts, the ones of the schedule.period Microsoft
+# removed, and the schedule.frequency replacing each of them
+QUERY_PERIOD_FREQUENCIES = {
+    "1H": "PT1H",
+    "3H": "PT3H",
+    "12H": "PT12H",
+    "24H": "P1D",
+}
+
+
+def _duration_seconds(duration):
+    """Length of an ISO 8601 duration such as PT1H or P1D, so that two
+    spellings of the same frequency (P1D, PT24H) compare equal. A value this
+    does not understand is returned as is, and only equals itself."""
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", str(duration))
+    if not duration or not match:
+        return duration
+    days, hours, minutes, seconds = (int(value or 0) for value in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
@@ -340,23 +360,27 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         return token, expiration
 
     def process_query_period(self, query_period: str, rule_file: str):
-        """Process the query period time
-        :return: a query period time
+        """Translate a query_period into the schedule.frequency Graph expects
+
+        Rules and configurations keep the values of the removed schedule.period,
+        so upgrading droid does not mean rewriting them.
+        :return: an ISO 8601 duration
         """
         query_period = str(query_period).upper()
-        if query_period in [
-            "0",
-            "1H",
-            "3H",
-            "12H",
-            "24H",
-        ]:
-            return query_period
-        else:
-            self.logger.error(
-                f"Sigma Query Period must be one of '0', '1H', '3H', '12H' or '24H', used value provided in the config {self._query_period} - {rule_file}"
+        if query_period in QUERY_PERIOD_FREQUENCIES:
+            return QUERY_PERIOD_FREQUENCIES[query_period]
+        if query_period == "0":
+            # TODO: Graph documents no frequency for a continuous (NRT) rule.
+            # Refused until the value is confirmed against a tenant, rather than
+            # guessing one and deploying a rule that runs on another schedule.
+            message = (
+                "query_period '0' (continuous) has no documented equivalent in the Graph "
+                f"schedule.frequency, use one of {list(QUERY_PERIOD_FREQUENCIES)} - {rule_file}"
             )
-            raise
+        else:
+            message = f"query_period must be one of {list(QUERY_PERIOD_FREQUENCIES)}, got '{query_period}' - {rule_file}"
+        self.logger.error(message)
+        raise ValueError(message)
 
     def create_rule(self, rule_content, rule_converted, rule_file):
         """
@@ -377,10 +401,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Handling the status of the alert
 
         if rule_content.get("custom", {}).get("disabled") is True:
-            enabled = False
+            status = "disabled"
             self.logger.info(f"Disabling the rule {rule_file}")
         else:
-            enabled = True
+            status = "enabled"
 
         # Handling the severity
         if rule_content["level"] == "critical":
@@ -419,9 +443,8 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         try:
             alert_rule = {
                 "displayName": display_name,
-                "isEnabled": enabled,
+                "status": status,
                 "queryCondition": {"queryText": rule_converted},
-                "schedule": {"period": self._query_period.upper()},
                 "detectionAction": {
                     "alertTemplate": {
                         "title": alert_title,
@@ -438,6 +461,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         except Exception as e:
             self.logger.error(e)
 
+        # The rule overrides its group, which overrides the configuration. Only
+        # the value that wins is translated, so a configuration default with no
+        # frequency does not fail the rules that override it.
+        query_period = self._query_period
         if self._query_period_groups:
             query_period_group = get_pipeline_group_match(
                 rule_content, self._query_period_groups
@@ -446,16 +473,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.debug(
                     f"Applying the query_period value from group {query_period_group}"
                 )
-                alert_rule["schedule"]["period"] = self.process_query_period(
-                    self._query_period_groups[query_period_group]["query_period"],
-                    rule_file,
-                )
+                query_period = self._query_period_groups[query_period_group]["query_period"]
+        query_period = rule_content.get("custom", {}).get("query_period", query_period)
+        alert_rule["schedule"] = {
+            "frequency": self.process_query_period(query_period, rule_file)
+        }
 
         if "custom" in rule_content:
-            if "query_period" in rule_content["custom"]:
-                alert_rule["schedule"]["period"] = self.process_query_period(
-                    rule_content["custom"]["query_period"], rule_file
-                )
             if "actions" in rule_content["custom"]:
                 responseActions = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file
@@ -569,64 +593,65 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 raise
 
+    def rule_differences(self, existing_rule, new_rule):
+        """Name the settings where a deployed rule differs from the one droid deploys
+
+        Graph returns every property of a rule, the ones droid leaves unset as
+        nulls, empty strings or empty collections, so each setting is
+        normalised on both sides rather than compared verbatim.
+        """
+        existing_template = (existing_rule.get("detectionAction") or {}).get("alertTemplate") or {}
+        new_template = new_rule["detectionAction"]["alertTemplate"]
+
+        existing_status = existing_rule.get("status")
+        if existing_status == "autoDisabled" and new_rule["status"] == "enabled":
+            # Left as Microsoft set it, see push_detection_rule
+            existing_status = "enabled"
+
+        compared = {
+            "displayName": (existing_rule.get("displayName"), new_rule["displayName"]),
+            "status": (existing_status, new_rule["status"]),
+            "query": (
+                (existing_rule.get("queryCondition") or {}).get("queryText"),
+                new_rule["queryCondition"]["queryText"],
+            ),
+            "frequency": (
+                _duration_seconds((existing_rule.get("schedule") or {}).get("frequency")),
+                _duration_seconds(new_rule["schedule"]["frequency"]),
+            ),
+        }
+        for field in ("title", "description", "severity", "recommendedActions"):
+            compared[field] = (existing_template.get(field) or None, new_template.get(field) or None)
+        for field in ("category", "mitreTechniques"):
+            compared[field] = (existing_template.get(field), new_template.get(field))
+        compared["responseActions"] = (
+            (existing_rule.get("detectionAction") or {}).get("responseActions"),
+            new_rule["detectionAction"].get("responseActions"),
+        )
+
+        # entityMappings is only part of the payload when the rule defines
+        # custom.xdr_entity_mappings; otherwise the service auto-derives it and
+        # a comparison would flag every rule as changed. The service fills
+        # every category and column, unset ones as empty strings, so both
+        # sides are reduced to their non-empty (category, column, value)
+        # triples before comparing.
+        new_mappings = new_template.get("entityMappings")
+        if new_mappings is not None:
+            compared["entityMappings"] = (
+                self._entity_mapping_triples(existing_template.get("entityMappings")),
+                self._entity_mapping_triples(new_mappings),
+            )
+
+        return [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
+
     def check_rule_changes(self, existing_rule, new_rule):
         try:
-            change = False
-            global_fields = [
-                "displayName",
-                "isEnabled",
-            ]
-            alertTemplate_fields = [
-                "title",
-                "description",
-                "severity",
-                "category",
-                "recommendedActions",
-                "mitreTechniques",
-            ]
-
-            for field in global_fields:
-                if existing_rule[field] != new_rule[field]:
-                    change = True
-            for field in alertTemplate_fields:
-                if (
-                    existing_rule["detectionAction"]["alertTemplate"][field]
-                    != new_rule["detectionAction"]["alertTemplate"][field]
-                ):
-                    change = True
-            if (
-                existing_rule["queryCondition"]["queryText"]
-                != new_rule["queryCondition"]["queryText"]
-            ):
-                change = True
-            if existing_rule["schedule"]["period"] != new_rule["schedule"]["period"]:
-                change = True
-            if (
-                existing_rule["detectionAction"]["responseActions"]
-                != new_rule["detectionAction"]["responseActions"]
-            ):
-                change = True
-            # entityMappings is only part of the payload when the rule defines
-            # custom.xdr_entity_mappings; otherwise the service auto-derives it and
-            # a comparison would flag every rule as changed. The service fills
-            # every category and column, unset ones as empty strings, so both
-            # sides are reduced to their non-empty (category, column, value)
-            # triples before comparing.
-            new_mappings = new_rule["detectionAction"]["alertTemplate"].get(
-                "entityMappings"
-            )
-            if new_mappings is not None:
-                if self._entity_mapping_triples(
-                    existing_rule["detectionAction"]["alertTemplate"].get(
-                        "entityMappings"
-                    )
-                ) != self._entity_mapping_triples(new_mappings):
-                    change = True
+            differences = self.rule_differences(existing_rule, new_rule)
         except Exception as e:
             self.logger.error(f"Error while checking rule changes {e}")
             return True
-        if change:
-            self.logger.info(f"Rule '{new_rule['displayName']}' has changed")
+        if differences:
+            self.logger.info(f"Rule '{new_rule['displayName']}' has changed: {', '.join(differences)}")
             return True
         else:
             self.logger.info(
@@ -645,12 +670,22 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         existing_rule = self.get_rule(rule_content["id"], tenant_id=tenant_id)
         if existing_rule:
             self.logger.info("Rule already exists")
+            payload = alert_rule
+            if existing_rule.get("status") == "autoDisabled" and alert_rule["status"] == "enabled":
+                # Microsoft turns off a rule that keeps failing. Turning it back
+                # on every export would only have it fail again: an analyst has
+                # to look at it first.
+                self.logger.warning(
+                    f"Rule {rule_file} was auto-disabled by Microsoft XDR, leaving it disabled - fix and re-enable it on the platform",
+                    extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
+                )
+                payload = {key: value for key, value in alert_rule.items() if key != "status"}
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
             else:
                 api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
                 response, status_code = self._patch(
-                    url=api_url, payload=alert_rule, tenant_id=tenant_id
+                    url=api_url, payload=payload, tenant_id=tenant_id
                 )
         else:
             api_url = "/security/rules/detectionRules"
