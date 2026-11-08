@@ -128,6 +128,59 @@ ACTION_TYPES = {
 }
 SERVER_LOG_LEVELS = ("trace", "debug", "info", "warn", "error", "fatal")
 
+# Kibana alert suppression: one alert per group of field values, for a
+# duration or for each rule execution. Needs a Platinum license.
+SUPPRESSION_MISSING_FIELDS = {"suppress": "suppress", "do_not_suppress": "doNotSuppress"}
+SUPPRESSION_KEYS = ("group_by", "duration", "missing_fields")
+SUPPRESSION_MAX_FIELDS = 3
+
+
+def parse_suppression(spec, where):
+    """Validate a suppression of the config, return Kibana's alert_suppression"""
+
+    if not isinstance(spec, dict):
+        raise ValueError(f"{where}: suppression must be a table with group_by, and optionally duration and missing_fields")
+
+    unknown = set(spec) - set(SUPPRESSION_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{where}: unknown suppression parameters {', '.join(sorted(unknown))}, expected {', '.join(SUPPRESSION_KEYS)}"
+        )
+
+    group_by = spec.get("group_by")
+    if (
+        not isinstance(group_by, list)
+        or not 1 <= len(group_by) <= SUPPRESSION_MAX_FIELDS
+        or not all(isinstance(field, str) and field for field in group_by)
+    ):
+        raise ValueError(f"{where}: suppression group_by must list 1 to {SUPPRESSION_MAX_FIELDS} field names")
+
+    missing_fields = spec.get("missing_fields", "suppress")
+    if missing_fields not in SUPPRESSION_MISSING_FIELDS:
+        raise ValueError(
+            f"{where}: suppression missing_fields must be one of {', '.join(SUPPRESSION_MISSING_FIELDS)}"
+        )
+
+    suppression = {"group_by": list(group_by)}
+    if "duration" in spec:
+        match = re.fullmatch(r"(\d+)([smh])", str(spec["duration"]))
+        if not match or int(match.group(1)) == 0:
+            raise ValueError(f"{where}: invalid suppression duration '{spec['duration']}', e.g. 90s, 30m or 4h")
+        suppression["duration"] = {"value": int(match.group(1)), "unit": match.group(2)}
+    suppression["missing_fields_strategy"] = SUPPRESSION_MISSING_FIELDS[missing_fields]
+
+    return suppression
+
+
+def parse_max_signals(value, where):
+    """Validate the maximum number of alerts a rule run creates"""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{where}: max_signals must be a positive integer, got '{value}'")
+
+    return value
+
+
 TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
@@ -307,6 +360,15 @@ class ElasticPlatform(AbstractPlatform):
 
         # Alert suppression needs a Platinum license
         self._suppress_correlation_alerts = self._parameters.get("suppress_correlation_alerts", True)
+        self._suppression = None
+        if "suppression" in self._parameters:
+            self._suppression = parse_suppression(self._parameters["suppression"], "ElasticPlatform")
+        # Fail before any export on a pipeline group suppression that Kibana would refuse
+        for group, group_config in (self._parameters.get("pipelines") or {}).items():
+            if isinstance(group_config, dict) and "suppression" in group_config:
+                parse_suppression(group_config["suppression"], f"ElasticPlatform: pipeline group '{group}'")
+
+        self._max_signals = parse_max_signals(self._parameters.get("max_signals", 100), "ElasticPlatform")
 
         self._auth_method = self._parameters.get("auth_method", "basic")
         if self._auth_method == "basic":
@@ -540,6 +602,7 @@ class ElasticPlatform(AbstractPlatform):
             "references",
             "building_block_type",
             "alert_suppression",
+            "max_signals",
         ]
         if new_rule.get("index"):
             fields.append("index")
@@ -677,6 +740,28 @@ class ElasticPlatform(AbstractPlatform):
 
         return [self._actions[name] for name in selected]
 
+    def rule_suppression(self, rule_content, rule_file):
+        """Resolve the alert suppression a rule asks for
+
+        The rule's own `elastic_suppression` wins, then the one of its pipeline
+        group, then the platform one. `elastic_suppression: false` opts out.
+
+        Return: Kibana's alert_suppression, None when nothing is configured, or
+        False when the rule opts out
+        """
+
+        custom = rule_content.get("custom", {})
+        if "elastic_suppression" in custom:
+            if custom["elastic_suppression"] is False:
+                return False
+            return parse_suppression(custom["elastic_suppression"], f"Rule {rule_file}")
+
+        group_config = rule_content.get("_droid_variant", {}).get("config", {})
+        if "suppression" in group_config:
+            return parse_suppression(group_config["suppression"], f"Rule {rule_file}")
+
+        return dict(self._suppression) if self._suppression else None
+
     @staticmethod
     def correlation_group_by(query):
         """Return the fields the aggregation of an ES|QL correlation groups by"""
@@ -752,6 +837,10 @@ class ElasticPlatform(AbstractPlatform):
                 self._index_name = rule_content["custom"]["index"]
 
 
+        max_signals = self._max_signals
+        if "elastic_max_signals" in rule_content.get("custom", {}):
+            max_signals = parse_max_signals(rule_content["custom"]["elastic_max_signals"], f"Rule {rule_file}")
+
         interval = f"{self._schedule_interval}{self._schedule_interval_unit}"
         extra_look_back = self._additional_look_back_seconds
         # Kibana only hands the query the events since `from`: a correlation
@@ -780,7 +869,7 @@ class ElasticPlatform(AbstractPlatform):
             "license": self._license,
             "output_index": "",  # TODO: Check if there should be a parameter for this
             "meta": {"from": self._additional_look_back or "5m"},  # look-back shown by Kibana
-            "max_signals": 100,  # TODO: Check if there should be a parameter for this
+            "max_signals": max_signals,
             "risk_score": risk_score,
             "risk_score_mapping": [],  # TODO: Check if this should be configurable
             "severity": severity,
@@ -812,12 +901,26 @@ class ElasticPlatform(AbstractPlatform):
         # An aggregating query has no _id to deduplicate on, and every run
         # within the look-back sees the same bucket again: suppress the alerts
         # of a group already raised for as long as a run can see it
-        if language == "esql" and timespan and self._suppress_correlation_alerts:
+        suppression = self.rule_suppression(rule_content, rule_file)
+        correlation = language == "esql" and timespan
+        if suppression:
+            if correlation:
+                suppression.setdefault("duration", {"value": look_back_seconds, "unit": "s"})
+                returned = self.correlation_group_by(rule_converted)
+                not_returned = [field for field in suppression["group_by"] if field not in returned]
+                if returned and not_returned:
+                    self.logger.warning(
+                        f"Correlation {rule_file} suppresses on {', '.join(not_returned)}, which it does not "
+                        f"return: its alerts only hold {', '.join(returned)}"
+                    )
+            json_data["alert_suppression"] = suppression
+        elif suppression is None and correlation and self._suppress_correlation_alerts:
             group_by = self.correlation_group_by(rule_converted)
-            if len(group_by) > 3:
+            if len(group_by) > SUPPRESSION_MAX_FIELDS:
                 self.logger.warning(
-                    f"Correlation {rule_file} groups by more than the 3 fields Kibana can suppress on, "
-                    "each run will raise its alerts again"
+                    f"Correlation {rule_file} groups by more than the {SUPPRESSION_MAX_FIELDS} fields Kibana "
+                    "can suppress on, each run will raise its alerts again: pick the fields to suppress on "
+                    "with custom.elastic_suppression"
                 )
             elif group_by:
                 json_data["alert_suppression"] = {

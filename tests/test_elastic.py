@@ -436,6 +436,172 @@ def test_rule_changes_detect_alert_suppression():
 
 
 # ---------------------------------------------------------------------------
+# Alert suppression and max signals
+# ---------------------------------------------------------------------------
+
+def with_group(rule, group_config):
+    """Rule content as it reaches export, carrying its pipeline group config"""
+    return {**rule, "_droid_variant": {"config": group_config}}
+
+
+def test_atomic_rule_without_suppression_configured_is_not_suppressed():
+    assert "alert_suppression" not in export(build_platform())
+
+
+def test_rule_suppresses_its_alerts_per_field_for_a_period():
+    """One alert per account and per hour for a noisy rule"""
+    rule = {**RULE_CONTENT, "custom": {"elastic_suppression": {"group_by": ["user.name"], "duration": "1h"}}}
+
+    assert export(build_platform(), rule)["alert_suppression"] == {
+        "group_by": ["user.name"],
+        "duration": {"value": 1, "unit": "h"},
+        "missing_fields_strategy": "suppress",
+    }
+
+
+def test_suppression_without_duration_suppresses_per_rule_execution():
+    rule = {**RULE_CONTENT, "custom": {"elastic_suppression": {"group_by": ["host.name"], "missing_fields": "do_not_suppress"}}}
+
+    assert export(build_platform(), rule)["alert_suppression"] == {
+        "group_by": ["host.name"],
+        "missing_fields_strategy": "doNotSuppress",
+    }
+
+
+def test_pipeline_group_suppression_applies_to_its_rules():
+    rule = with_group(RULE_CONTENT, {"suppression": {"group_by": ["host.name"], "duration": "30m"}})
+
+    suppression = export(build_platform(), rule)["alert_suppression"]
+
+    assert suppression["group_by"] == ["host.name"]
+    assert suppression["duration"] == {"value": 30, "unit": "m"}
+
+
+def test_platform_suppression_applies_to_every_rule():
+    platform = build_platform(suppression={"group_by": ["host.name"], "duration": "4h"})
+
+    assert export(platform)["alert_suppression"]["duration"] == {"value": 4, "unit": "h"}
+
+
+def test_rule_suppression_wins_over_its_group_and_the_platform():
+    platform = build_platform(suppression={"group_by": ["host.name"]})
+    rule = with_group(
+        {**RULE_CONTENT, "custom": {"elastic_suppression": {"group_by": ["user.name"]}}},
+        {"suppression": {"group_by": ["source.ip"]}},
+    )
+
+    assert export(platform, rule)["alert_suppression"]["group_by"] == ["user.name"]
+
+
+def test_group_suppression_wins_over_the_platform():
+    platform = build_platform(suppression={"group_by": ["host.name"]})
+    rule = with_group(RULE_CONTENT, {"suppression": {"group_by": ["source.ip"]}})
+
+    assert export(platform, rule)["alert_suppression"]["group_by"] == ["source.ip"]
+
+
+def test_rule_can_opt_out_of_suppression():
+    platform = build_platform(suppression={"group_by": ["host.name"]})
+    rule = {**RULE_CONTENT, "custom": {"elastic_suppression": False}}
+
+    assert "alert_suppression" not in export(platform, rule)
+
+
+def recording_warnings(platform):
+    """ColorLogger sits outside the logging hierarchy, out of caplog's reach"""
+    warnings = []
+    platform.logger.warning = lambda message, *args, **kwargs: warnings.append(message)
+    return warnings
+
+
+def test_configured_suppression_of_a_correlation_replaces_the_automatic_one():
+    """Picking the fields yourself is how a correlation grouped by more than
+    two fields gets suppressed: no warning then"""
+    query = CORRELATION_QUERY.replace("host.name", "host.name, source.ip, user.domain")
+    rule = {**CORRELATION_CONTENT, "custom": {"elastic_suppression": {"group_by": ["timebucket", "host.name"]}}}
+
+    platform = build_platform()
+    warnings = recording_warnings(platform)
+
+    suppression = export(platform, rule, query)["alert_suppression"]
+
+    assert suppression["group_by"] == ["timebucket", "host.name"]
+    # Without a duration, a correlation still suppresses over its look-back
+    assert suppression["duration"] == {"value": 900, "unit": "s"}
+    assert warnings == []
+
+
+def test_correlation_suppression_on_a_field_it_does_not_return_is_reported():
+    """A correlation only returns its group-by fields: suppressing on another
+    one would put every alert in the same group"""
+    rule = {**CORRELATION_CONTENT, "custom": {"elastic_suppression": {"group_by": ["user.name"]}}}
+    platform = build_platform()
+    warnings = recording_warnings(platform)
+
+    export(platform, rule, CORRELATION_QUERY)
+
+    assert len(warnings) == 1 and "user.name" in warnings[0]
+
+
+def test_automatic_suppression_of_a_correlation_grouped_by_too_many_fields_is_reported():
+    query = CORRELATION_QUERY.replace("host.name", "host.name, source.ip, user.domain")
+    platform = build_platform()
+    warnings = recording_warnings(platform)
+
+    export(platform, CORRELATION_CONTENT, query)
+
+    assert len(warnings) == 1 and "elastic_suppression" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "suppression, error",
+    [
+        ({"group_by": []}, "group_by"),
+        ({"group_by": ["a", "b", "c", "d"]}, "group_by"),
+        ({"group_by": "host.name"}, "group_by"),
+        ({"group_by": ["host.name"], "duration": "1d"}, "duration"),
+        ({"group_by": ["host.name"], "missing_fields": "ignore"}, "missing_fields"),
+        ({"group_by": ["host.name"], "period": "1h"}, "period"),
+    ],
+)
+def test_invalid_suppression_is_rejected(suppression, error):
+    with pytest.raises(ValueError, match=error):
+        build_platform(suppression=suppression)
+
+
+def test_invalid_rule_suppression_fails_the_export_of_that_rule():
+    rule = {**RULE_CONTENT, "custom": {"elastic_suppression": {"group_by": []}}}
+
+    with pytest.raises(ValueError, match="group_by"):
+        export(build_platform(), rule)
+
+
+def test_max_signals_defaults_to_100():
+    assert export(build_platform())["max_signals"] == 100
+
+
+def test_max_signals_is_configurable_for_the_platform_and_per_rule():
+    platform = build_platform(max_signals=500)
+    noisy = {**RULE_CONTENT, "custom": {"elastic_max_signals": 1000}}
+
+    assert export(platform)["max_signals"] == 500
+    assert export(platform, noisy)["max_signals"] == 1000
+
+
+@pytest.mark.parametrize("max_signals", [0, -1, "many", True])
+def test_invalid_max_signals_is_rejected(max_signals):
+    with pytest.raises(ValueError, match="max_signals"):
+        build_platform(max_signals=max_signals)
+
+
+def test_rule_changes_detect_max_signals():
+    platform = build_platform()
+    deployed = export(platform)
+
+    assert platform.check_rule_changes(deployed, {**deployed, "max_signals": 500}) is True
+
+
+# ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
 
