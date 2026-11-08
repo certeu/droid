@@ -197,6 +197,51 @@ def test_xdr_rule_that_cannot_be_built_is_an_integrity_error():
     assert run_integrity(platform, rule_content, "the new query")
 
 
+class UnreadableXDRPlatform(FakeXDRPlatform):
+    """A platform refusing to return some tenants' rules, throttled or forbidden"""
+
+    def __init__(self, unreadable, **kwargs):
+        super().__init__(**kwargs)
+        self._unreadable = unreadable
+
+    def get_rule(self, rule_id, tenant_id=None):
+        if tenant_id in self._unreadable:
+            raise Exception("Graph API request throttled beyond the wait budget")
+        return super().get_rule(rule_id, tenant_id)
+
+
+def test_xdr_rule_that_cannot_be_read_is_an_integrity_error():
+    """Integrity that cannot read the rule has checked nothing"""
+    platform = UnreadableXDRPlatform({None})
+    assert run_integrity(platform, build_rule_content(), "the new query")
+
+
+def test_xdr_mssp_tenant_that_cannot_be_read_is_an_integrity_error():
+    platform = UnreadableXDRPlatform(
+        {"tenant-a"},
+        rules={"tenant-b": build_xdr_rule(query="the new query")},
+        export_list={"group-a": {"tenant_id": "tenant-a"}, "group-b": {"tenant_id": "tenant-b"}},
+    )
+    assert run_integrity(platform, build_rule_content(), "the new query", mssp=True)
+
+
+def test_xdr_mssp_unreadable_tenant_does_not_hide_the_next_ones():
+    """A tenant that cannot be read must not end the check: the next tenants
+    are still compared"""
+    checked = []
+    platform = UnreadableXDRPlatform(
+        {"tenant-a"},
+        rules={"tenant-b": build_xdr_rule(query="the new query")},
+        export_list={"group-a": {"tenant_id": "tenant-a"}, "group-b": {"tenant_id": "tenant-b"}},
+    )
+    original = platform.rule_differences
+    platform.rule_differences = lambda deployed, expected: checked.append(deployed) or original(deployed, expected)
+
+    run_integrity(platform, build_rule_content(), "the new query", mssp=True)
+
+    assert len(checked) == 1
+
+
 def test_xdr_mssp_removed_rule_still_on_the_platform():
     """A removed rule not yet deleted on one tenant is not an integrity error"""
     platform = FakeXDRPlatform(

@@ -236,7 +236,7 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
         export_list = platform.get_export_list_mssp()
     except Exception as e:
         logger.error(f"Couldn't get the export list for the designated customers - error {e}")
-        return error
+        return True
 
     logger.info("Integrity check for designated customers")
 
@@ -268,8 +268,11 @@ def integrity_rule_ms_xdr_mssp(rule_converted, rule_content, platform: Microsoft
         try:
             saved_search: dict = platform.get_rule(rule_content["id"], tenant_id)
         except Exception as e:
+            # A tenant that cannot be read has checked nothing, which is not a
+            # pass: report it, and still check the other tenants
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on tenant {tenant_id} from {group} - error {e}")
-            return error
+            error_occured = True
+            continue
 
         removed_check = check_rule_removed(rule_content, rule_file, saved_search, logger, error, tolerate_deletion_delay=True)
         if removed_check is not None:
@@ -289,8 +292,9 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
         if not saved_search:
             saved_search: dict = platform.get_rule(rule_content["id"])
     except Exception as e:
+        # Integrity that cannot read the rule has checked nothing
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
-        return error
+        return True
 
     error = check_rule_removed(rule_content, rule_file, saved_search, logger, error, tolerate_deletion_delay=True)
     if error is not None:
@@ -302,11 +306,12 @@ def integrity_rule_ms_xdr(rule_converted, rule_content, platform: MicrosoftXDRPl
     # itself uses to decide whether a rule needs an update
     try:
         expected_rule = platform.build_alert_rule(rule_content, rule_converted, rule_file)
+        differences = platform.rule_differences(saved_search, expected_rule)
     except Exception as e:
-        logger.error(f"Couldn't build the rule {rule_file} to check its integrity - error {e}")
+        logger.error(f"Couldn't compare the rule {rule_file} with the platform to check its integrity - error {e}")
         return True
 
-    for difference in platform.rule_differences(saved_search, expected_rule):
+    for difference in differences:
         logger.error(f"The {difference} of the rule {rule_file} does not match the platform")
         error = True
 
