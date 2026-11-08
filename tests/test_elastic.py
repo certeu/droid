@@ -1147,6 +1147,11 @@ def test_rule_override_can_change_the_frequency():
         ({"dispatch_email": {"to": ["{{context.rule.name}}@planet-express.local"]}}, "context.rule.name"),
         ({"dispatch_email": {"to": "leela@planet-express.local"}}, "list"),
         ({"dispatch_email": {"to": [42]}}, "42"),
+        # Routed on by mail servers honouring the percent hack
+        ({"dispatch_email": {"to": ["mom%momcorp.example@planet-express.local"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": [".leela@planet-express.local"]}}, "leela"),
+        ({"dispatch_email": {"to": ["leela.@planet-express.local"]}}, "leela"),
+        ({"dispatch_email": {"to": ["leela..turanga@planet-express.local"]}}, "leela"),
     ],
 )
 def test_invalid_rule_override_fails_the_export_of_that_rule(override, error):
@@ -1188,6 +1193,15 @@ def test_allowed_recipient_domains_only_bind_the_rules():
     action = actions_of(export(build_platform(actions=actions)))["planet-express-smtp"]
 
     assert action["params"]["to"] == ["mom@momcorp.example"]
+
+
+@pytest.mark.parametrize(
+    "recipient", ["leela.turanga@planet-express.local", "hermes+bureaucrat@planet-express.local", "o'reilly@planet-express.local"]
+)
+def test_plain_addresses_of_an_allowed_domain_are_accepted(recipient):
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"to": [recipient]}}}}
+
+    assert actions_of(export(build_platform(actions=ACTIONS), rule))["planet-express-smtp"]["params"]["to"] == [recipient]
 
 
 def test_recipient_domains_are_matched_whatever_their_case():

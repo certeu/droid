@@ -132,8 +132,9 @@ SERVER_LOG_LEVELS = ("trace", "debug", "info", "warn", "error", "fatal")
 ACTION_FREQUENCY_PARAMS = ("per_alert", "throttle")
 RECIPIENT_PARAMS = ("to", "cc", "bcc")
 # Exactly one plain address: the mailer would split a comma, semicolon or
-# display name into more recipients than the one whose domain was checked
-EMAIL_ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
+# display name into more recipients than the one whose domain was checked,
+# and a mail server honouring the percent hack relays user%other@domain on
+EMAIL_ADDRESS = re.compile(r"[A-Za-z0-9_+'-]+(?:\.[A-Za-z0-9_+'-]+)*@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
 
 # Kibana alert suppression: one alert per group of field values, for a
 # duration or for each rule execution. Needs a Platinum license.
