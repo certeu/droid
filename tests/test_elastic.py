@@ -1139,6 +1139,14 @@ def test_rule_override_can_change_the_frequency():
         ({"dispatch_email": {"to": ["leela@planet-express.local", "zapp@doop.example"]}}, "doop.example"),
         ({"dispatch_email": {"to": ["spy@evil.planet-express.local.example"]}}, "planet-express.local.example"),
         ({"dispatch_email": {"to": ["no-domain"]}}, "no-domain"),
+        # One entry hiding several addresses: the mailer would split it
+        ({"dispatch_email": {"to": ["mom@momcorp.example, leela@planet-express.local"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": ["mom@momcorp.example;leela@planet-express.local"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": ["Mom <mom@momcorp.example> leela@planet-express.local"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": ["mom@momcorp.example leela@planet-express.local"]}}, "momcorp.example"),
+        ({"dispatch_email": {"to": ["{{context.rule.name}}@planet-express.local"]}}, "context.rule.name"),
+        ({"dispatch_email": {"to": "leela@planet-express.local"}}, "list"),
+        ({"dispatch_email": {"to": [42]}}, "42"),
     ],
 )
 def test_invalid_rule_override_fails_the_export_of_that_rule(override, error):

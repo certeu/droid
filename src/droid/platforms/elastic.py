@@ -131,6 +131,9 @@ SERVER_LOG_LEVELS = ("trace", "debug", "info", "warn", "error", "fatal")
 # What a rule may override of an action, once the action lists it
 ACTION_FREQUENCY_PARAMS = ("per_alert", "throttle")
 RECIPIENT_PARAMS = ("to", "cc", "bcc")
+# Exactly one plain address: the mailer would split a comma, semicolon or
+# display name into more recipients than the one whose domain was checked
+EMAIL_ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
 
 # Kibana alert suppression: one alert per group of field values, for a
 # duration or for each rule execution. Needs a Platinum license.
@@ -858,12 +861,19 @@ class ElasticPlatform(AbstractPlatform):
                 )
             if domains is not None:
                 for param in RECIPIENT_PARAMS:
-                    for recipient in override.get(param) or []:
-                        domain = str(recipient).rpartition("@")[2].lower() if "@" in str(recipient) else None
-                        if domain not in domains:
+                    if param not in override:
+                        continue
+                    recipients = override[param]
+                    if not isinstance(recipients, list):
+                        raise ValueError(
+                            f"custom.elastic_actions: action '{name}' takes its {param} recipients as a list"
+                        )
+                    for recipient in recipients:
+                        match = EMAIL_ADDRESS.fullmatch(recipient) if isinstance(recipient, str) else None
+                        if not match or match.group(1).lower() not in domains:
                             raise ValueError(
-                                f"custom.elastic_actions: action '{name}' only sends to {', '.join(domains)}, "
-                                f"not to {recipient}"
+                                f"custom.elastic_actions: action '{name}' only sends to single addresses of "
+                                f"{', '.join(domains)}, not to {recipient}"
                             )
 
             config = {**self._action_configs[name], **override}
