@@ -311,6 +311,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             rule, status_code = self._get(
                 url="/security/rules/detectionRules", params=params, tenant_id=tenant_id
             )
+            # A refused lookup has no "value" either: taken for an absent rule,
+            # a removal would report success, and an export create a duplicate
+            if status_code != 200 or not isinstance(rule, dict):
+                raise Exception(f"Graph answered {status_code}: {get_error_message(rule)}")
             rule_value = rule.get("value", [])
             if isinstance(rule_value, list) and len(rule_value) > 0:
                 time.sleep(6)

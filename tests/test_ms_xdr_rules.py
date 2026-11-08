@@ -728,3 +728,52 @@ def test_an_update_does_not_change_the_rule_id(platform, build_payload, graph):
 
 def test_rules_are_managed_on_graph_v1(platform):
     assert platform._api_base_url == "https://graph.microsoft.com/v1.0"
+
+
+# Looking a rule up
+
+
+@pytest.mark.parametrize(
+    "response, status_code",
+    [
+        ({"error": {"code": "Forbidden", "message": "Missing application scopes"}}, 403),
+        ({"error": {"code": "BadRequest", "message": "Invalid filter clause"}}, 400),
+        (None, 500),
+    ],
+    ids=["forbidden", "bad-request", "no-response"],
+)
+def test_a_lookup_graph_refuses_is_an_error(platform, monkeypatch, response, status_code):
+    """A refused lookup is not an absent rule: removal would report success
+    with the rule still deployed, and export would create a duplicate"""
+
+    monkeypatch.setattr(platform, "_get", lambda **kwargs: (response, status_code))
+
+    with pytest.raises(Exception):
+        platform.get_rule("8d3b2a6e-6f0a-4c1e-9a52-1f2e3d4c5b6a")
+
+
+def test_a_rule_graph_does_not_hold_is_absent(platform, monkeypatch):
+    monkeypatch.setattr(platform, "_get", lambda **kwargs: ({"value": []}, 200))
+
+    assert platform.get_rule("8d3b2a6e-6f0a-4c1e-9a52-1f2e3d4c5b6a") is None
+
+
+def test_a_rule_graph_holds_is_returned(platform, monkeypatch):
+    monkeypatch.setattr("droid.platforms.ms_xdr.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(platform, "_get", lambda **kwargs: ({"value": [{"id": "droid-8d3b"}]}, 200))
+
+    assert platform.get_rule("8d3b2a6e-6f0a-4c1e-9a52-1f2e3d4c5b6a") == {"id": "droid-8d3b"}
+
+
+def test_removing_a_rule_that_cannot_be_looked_up_is_an_error(platform, monkeypatch):
+    """It used to log the rule as already removed"""
+
+    platform._tenant_id = "tenant-planet-express"
+    monkeypatch.setattr(platform, "_get", lambda **kwargs: ({"error": {"message": "Missing application scopes"}}, 403))
+    deleted = []
+    monkeypatch.setattr(platform, "_delete", lambda **kwargs: deleted.append(kwargs) or ({}, 204))
+
+    with pytest.raises(Exception):
+        platform.remove_rule(build_rule_content(), "DeviceEvents", RULE_FILE)
+    assert deleted == []
+
