@@ -175,6 +175,26 @@ def test_a_rule_query_period_overrides_a_continuous_configuration(pushed, monkey
     assert pushed[0]["schedule"] == {"frequency": "PT12H"}
 
 
+def test_a_continuous_frequency_can_be_tried_from_the_environment(platform, pushed, monkeypatch):
+    """Graph documents no frequency for a continuous rule: the value to try
+    on a tenant comes from the environment."""
+
+    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
+
+    platform.create_rule(build_rule_content({"query_period": "0"}), "DeviceEvents", RULE_FILE)
+
+    assert pushed[0]["schedule"] == {"frequency": "PT0S"}
+
+
+def test_a_continuous_frequency_from_the_environment_is_compared_as_a_duration(platform, build_payload, monkeypatch):
+    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
+    payload = build_payload(build_rule_content({"query_period": "0"}))
+
+    deployed = deployed_rule(payload, schedule={"frequency": "PT0M"})
+
+    assert platform.rule_differences(deployed, payload) == []
+
+
 @pytest.mark.parametrize("query_period", ["0", "2H", "PT1H"])
 def test_a_query_period_without_a_frequency_is_an_error(platform, pushed, query_period):
     """Graph documents no frequency for a continuous rule, so droid refuses
@@ -569,6 +589,14 @@ def test_a_continuous_configuration_is_warned_about_up_front(warnings):
     assert warnings[0].startswith(
         "Breaking change: the continuous query_period '0', set in query_period, query_period_groups.slurm_factory,"
     )
+
+
+def test_a_continuous_configuration_being_tried_is_not_warned_about(warnings, monkeypatch):
+    monkeypatch.setenv("DROID_XDR_CONTINUOUS_FREQUENCY", "PT0S")
+
+    MicrosoftXDRPlatform(dict(XDR_PARAMETERS, query_period="0"), LOGGER_PARAM)
+
+    assert warnings == []
 
 
 def test_a_scheduled_configuration_is_not_warned_about(warnings):

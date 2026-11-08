@@ -102,6 +102,10 @@ IDENTIFIER_COLUMNS = {
     "initiatingProcessSHA256": ("sha256Column", "InitiatingProcessSHA256"),
 }
 
+# Sets the schedule.frequency a continuous query_period ("0") is deployed with,
+# to try values on a tenant until Graph documents one
+CONTINUOUS_FREQUENCY_VARIABLE = "DROID_XDR_CONTINUOUS_FREQUENCY"
+
 # query_period values droid accepts, the ones of the schedule.period Microsoft
 # removed, and the schedule.frequency replacing each of them
 QUERY_PERIOD_FREQUENCIES = {
@@ -233,7 +237,7 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         for group, settings in (self._query_period_groups or {}).items():
             if str(settings.get("query_period")) == "0":
                 continuous.append(f"query_period_groups.{group}")
-        if continuous:
+        if continuous and not environ.get(CONTINUOUS_FREQUENCY_VARIABLE):
             self.logger.warning(
                 f"Breaking change: the continuous query_period '0', set in {', '.join(continuous)}, "
                 "has no documented equivalent in the Graph API custom detection rules. Rules "
@@ -485,6 +489,14 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             # TODO: Graph documents no frequency for a continuous (NRT) rule.
             # Refused until the value is confirmed against a tenant, rather than
             # guessing one and deploying a rule that runs on another schedule.
+            # The environment variable lets that value be tried on a tenant.
+            continuous_frequency = environ.get(CONTINUOUS_FREQUENCY_VARIABLE)
+            if continuous_frequency:
+                self.logger.warning(
+                    f"Deploying the continuous query_period of {rule_file} with the untested frequency "
+                    f"'{continuous_frequency}' from {CONTINUOUS_FREQUENCY_VARIABLE}"
+                )
+                return continuous_frequency
             message = (
                 "query_period '0' (continuous) has no documented equivalent in the Graph "
                 f"schedule.frequency, use one of {list(QUERY_PERIOD_FREQUENCIES)} - {rule_file}"
@@ -773,7 +785,11 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self._entity_mapping_triples(new_mappings),
             )
 
-        return [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
+        differences = [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
+        for field in differences:
+            # Shows how Graph stored a value, when it differs from what droid sent
+            self.logger.debug(f"{field} differs, deployed: {compared[field][0]!r}, expected: {compared[field][1]!r}")
+        return differences
 
     def check_rule_changes(self, existing_rule, new_rule):
         try:
