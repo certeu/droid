@@ -750,6 +750,231 @@ def test_rule_changes_detect_a_changed_action():
 
 
 # ---------------------------------------------------------------------------
+# EQL correlations
+# ---------------------------------------------------------------------------
+
+def correlation_with_condition(tmp_path, condition):
+    rule = tmp_path / "correlation.yml"
+    rule.write_text(open(EVENT_COUNT_RULE).read().replace("        gte: 5", f"        {condition}"))
+    return str(rule)
+
+
+def test_eql_event_count_correlation_is_a_sequence():
+    query = convert("eql", EVENT_COUNT_RULE)
+
+    assert query.startswith("sequence by `1vault.signinattempts.target_user.email` with maxspan=10m")
+    assert query.endswith("with runs=5")
+
+
+def test_eql_temporal_correlation_is_a_sample():
+    assert convert("eql", TEMPORAL_RULE).startswith("sample by `1vault.signinattempts.target_user.email`")
+
+
+def test_eql_value_count_correlation_is_not_converted():
+    """The backend joins the events on the counted field: three sign-ins from
+    the same planet match, three from different planets do not"""
+    assert convert("eql", VALUE_COUNT_RULE) is None
+
+
+@pytest.mark.parametrize("condition", ["gt: 5", "eq: 5", "lte: 5", "lt: 5"])
+def test_eql_event_count_correlation_only_counts_at_least(tmp_path, condition):
+    """runs=N means at least N events, whatever the condition asked"""
+    assert convert("eql", correlation_with_condition(tmp_path, condition)) is None
+
+
+def test_eql_temporal_ordered_correlation_is_not_converted(tmp_path):
+    """The backend renders it as a query Elasticsearch cannot parse"""
+    rule = tmp_path / "ordered.yml"
+    rule.write_text(open(TEMPORAL_RULE).read().replace("type: temporal\n", "type: temporal_ordered\n"))
+
+    assert convert("eql", str(rule)) is None
+
+
+def test_esql_correlations_keep_every_condition(tmp_path):
+    assert "event_count < 5" in convert("esql", correlation_with_condition(tmp_path, "lt: 5"))
+
+
+# ---------------------------------------------------------------------------
+# Index of EQL rules
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "pipelines, index",
+    [
+        (["tests/files/elastic/pipeline_signin_attempts.yml"], ["*-signin-attempts-planet-express-*"]),
+        # A set_state without rule conditions applies to every rule
+        (["tests/files/elastic/pipeline_index_unconditioned.yml"], ["logs-vault-*"]),
+        # Either of two log sources
+        (["tests/files/elastic/pipeline_index_any_condition.yml"], ["logs-vault-*"]),
+        # The higher priority pipeline sets the index last
+        (
+            ["tests/files/elastic/pipeline_signin_attempts.yml", "tests/files/elastic/pipeline_index_override.yml"],
+            ["logs-signin-attempts-planet-express-default"],
+        ),
+    ],
+)
+def test_eql_rule_reads_the_index_its_pipelines_resolved(pipelines, index):
+    """The index goes into the deployed EQL rule and its searches: it must be
+    the one pySigma resolved, whatever the shape of the pipelines"""
+    config = {"pipelines": {"vault": {"pipelines": pipelines, "product": "vault", "service": "signin_attempts"}}}
+    platform = build_platform("eql")
+
+    Conversion(config, {}, "eql", LOGGER_PARAM).convert_rule(load_rule(SIGNIN_RULE), SIGNIN_RULE, platform)
+
+    assert platform._index_name == index
+
+
+def test_eql_rule_without_index_in_its_pipelines_reads_logs():
+    config = {"pipelines": {"windows": {"pipelines": ["tests/files/elastic/pipeline_signin_attempts.yml"],
+                                        "product": "windows", "category": "process_creation"}}}
+    rule = "tests/files/sigma-rules/valid/convert_valid_rule.yml"
+    platform = build_platform("eql")
+
+    Conversion(config, {}, "eql", LOGGER_PARAM).convert_rule(load_rule(rule), rule, platform)
+
+    assert platform._index_name == ["logs-*"]
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+class FakeSearchClient:
+    """Records the calls a search makes, standing in for Elasticsearch"""
+
+    def __init__(self, esql_values=None, eql_runs=1, eql_fails=False):
+        self.calls = []
+        self.esql = self.eql = self
+        self._esql_values = esql_values if esql_values is not None else [[0]]
+        self._eql_runs = eql_runs
+        self._eql_fails = eql_fails
+
+    def query(self, **kwargs):
+        self.calls.append(("esql.query", kwargs))
+        return {"columns": [{"name": "droid_hits"}], "values": self._esql_values}
+
+    def search(self, **kwargs):
+        self.calls.append(("eql.search", kwargs))
+        return {"id": "search-1", "is_running": True}
+
+    def get(self, **kwargs):
+        self.calls.append(("eql.get", kwargs))
+        if self._eql_fails:
+            raise RuntimeError("the vault exploded")
+        self._eql_runs -= 1
+        if self._eql_runs > 0:
+            return {"id": "search-1", "is_running": True}
+        return {"id": "search-1", "is_running": False, "hits": {"total": {"value": 3, "relation": "eq"}}}
+
+    def get_status(self, **kwargs):
+        raise AssertionError("get_status needs the monitor cluster privilege")
+
+    def delete(self, **kwargs):
+        self.calls.append(("eql.delete", kwargs))
+
+
+def searching_platform(monkeypatch, client, language="esql", **overrides):
+    monkeypatch.setattr(ElasticPlatform, "elastic_client", lambda self: client)
+    return build_platform(language, **overrides)
+
+
+def test_esql_search_counts_every_hit_on_the_cluster(monkeypatch):
+    """Counting the rows returned stops at the default LIMIT of 1000"""
+    client = FakeSearchClient(esql_values=[[4242]])
+    platform = searching_platform(monkeypatch, client)
+
+    hits = platform.run_elastic_search("FROM logs-*\n| WHERE true", "esql", {})
+
+    assert hits == 4242
+    assert client.calls[0][1]["query"] == "FROM logs-*\n| WHERE true\n| STATS droid_hits = COUNT(*)"
+
+
+def test_eql_search_waits_on_its_own_search_without_cluster_privilege(monkeypatch):
+    client = FakeSearchClient(eql_runs=3)
+    platform = searching_platform(monkeypatch, client, "eql")
+    platform._index_name = ["logs-vault-*"]
+
+    assert platform.run_elastic_search("any where true", "eql", {}) == 3
+
+    calls = [name for name, _ in client.calls]
+    assert calls == ["eql.search", "eql.get", "eql.get", "eql.get", "eql.delete"]
+    assert client.calls[0][1]["index"] == ["logs-vault-*"]
+    assert all(kwargs.get("wait_for_completion_timeout") for name, kwargs in client.calls if name == "eql.get")
+
+
+def test_eql_search_is_deleted_even_when_it_fails(monkeypatch):
+    """An async search left behind is kept five days on the cluster"""
+    client = FakeSearchClient(eql_fails=True)
+    platform = searching_platform(monkeypatch, client, "eql")
+    platform._index_name = ["logs-vault-*"]
+
+    with pytest.raises(RuntimeError):
+        platform.run_elastic_search("any where true", "eql", {})
+
+    assert client.calls[-1][0] == "eql.delete"
+
+
+@pytest.mark.parametrize(
+    "custom, index",
+    [({"raw_language": "eql"}, ["logs-*"]), ({"raw_language": "eql", "index": "logs-vault-*"}, ["logs-vault-*"])],
+)
+def test_raw_eql_rule_searches_the_index_it_is_deployed_on(monkeypatch, custom, index):
+    client = FakeSearchClient()
+    monkeypatch.setattr(ElasticPlatform, "elastic_client", lambda self: client)
+    platform = ElasticPlatform(dict(ELASTIC_PARAMETERS), LOGGER_PARAM, "eql", raw=True)
+
+    platform.run_elastic_search("any where true", "eql", {"custom": custom})
+
+    assert client.calls[0][1]["index"] == index
+
+
+# ---------------------------------------------------------------------------
+# Kibana errors
+# ---------------------------------------------------------------------------
+
+class KibanaResponse:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self.text = body
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+
+def answering(monkeypatch, status_code, body='{"message": "nope"}'):
+    for method in ("get", "delete"):
+        monkeypatch.setattr(elastic_module.requests, method, lambda *args, **kwargs: KibanaResponse(status_code, body))
+
+
+def test_rule_absent_from_kibana_is_not_found(monkeypatch):
+    answering(monkeypatch, 404)
+
+    assert build_platform().get_rule("6f1d2c3b") is False
+
+
+def test_rule_kibana_refuses_to_show_is_an_error(monkeypatch):
+    """A 403 is not an absent rule: export would try to create it again"""
+    answering(monkeypatch, 403, '{"message": "Unauthorized to get a siem.esqlRule rule"}')
+
+    with pytest.raises(Exception, match="Unauthorized"):
+        build_platform().get_rule("6f1d2c3b")
+
+
+def test_removing_a_rule_already_gone_succeeds(monkeypatch):
+    answering(monkeypatch, 404)
+
+    build_platform().remove_rule({"id": "6f1d2c3b"})
+
+
+def test_removing_a_rule_kibana_refuses_to_delete_is_an_error(monkeypatch):
+    answering(monkeypatch, 403, '{"message": "Unauthorized to delete a siem.esqlRule rule"}')
+
+    with pytest.raises(Exception, match="Unauthorized"):
+        build_platform().remove_rule({"id": "6f1d2c3b"})
+
+
+# ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
 

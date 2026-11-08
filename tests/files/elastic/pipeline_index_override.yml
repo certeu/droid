@@ -1,0 +1,13 @@
+name: Vault sign-in data stream only
+priority: 100
+
+transformations:
+
+- id: index_override
+  type: set_state
+  key: "index"
+  val: "logs-signin-attempts-planet-express-default"
+  rule_conditions:
+    - type: logsource
+      product: vault
+      service: signin_attempts

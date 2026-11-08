@@ -18,6 +18,7 @@ from sigma.data.mitre_attack import (
 )
 
 from elasticsearch import Elasticsearch
+from sigma.exceptions import SigmaConversionError
 
 # ES|QL and EQL only parse a dotted field name unquoted when every segment
 # starts with a letter (or with _ or @ followed by more) and is not a reserved
@@ -243,12 +244,19 @@ def eql_backend(backend_class):
 
     The backend only quotes a name starting with a digit or holding a space or
     a dash, which leaves out `vault.1category` and reserved words like `by`.
+    It also falls back on droid's default index, logs-*.
     """
 
     class DroidEqlBackend(backend_class):
         field_quote_pattern = EQL_UNQUOTED_FIELD
         field_quote_pattern_negation = True
         field_escape = "`"  # a backtick inside a quoted name is doubled
+
+        def __init__(self, *args, **kwargs):
+            # A rule whose pipelines set no index reads logs-*, rather than the
+            # beats and APM indices the backend falls back on
+            kwargs.setdefault("index_names", ["logs-*"])
+            super().__init__(*args, **kwargs)
 
     return DroidEqlBackend
 
@@ -487,48 +495,48 @@ class ElasticPlatform(AbstractPlatform):
 
         return list(threats.values())
 
-    def get_index_name(self, pipeline, rule_content):
-        index_value = "logs-*"
-        index_found = False
+    def get_index_name(self, converted_rule):
+        """Take the index the pipelines resolved while converting the rule
 
-        if "logsource" in rule_content:
-            matchlist = ["category", "custom_attributes", "product", "service", "source"]
-            matchlength = sum(1 for x in rule_content["logsource"] if x in matchlist)
+        pySigma applies every `set_state` of the index in priority order, with
+        or without rule conditions, so its processing state is the only
+        authority on which index an EQL rule reads.
+        """
 
-            for item in pipeline.items:
-                if (
-                    hasattr(item, "transformation")
-                    and hasattr(item.transformation, "key")
-                    and hasattr(item.transformation, "val")
-                    and item.transformation.key == "index"
-                ):
-                    matches = 0
+        index = None
+        try:
+            states = converted_rule.get_conversion_states() if converted_rule else []
+        except SigmaConversionError:
+            states = []
+        for state in states:
+            index = state.processing_state.get("index")
+            if index:
+                break
 
-                    for rule_condition in item.transformation.processing_item.rule_conditions:
-                        for key, value in rule_content["logsource"].items():
-                            if key in matchlist:
-                                condition_value = getattr(rule_condition.logsource, key, None)
-                                if condition_value is None or condition_value == value:
-                                    matches += 1
+        if not index:
+            self.logger.warning("No index set by the pipelines of the rule, using default index 'logs-*'")
+            self._index_name = ["logs-*"]
+            return
 
-                    if matches == matchlength:
-                        index_value = item.transformation.val
-                        self.logger.info(f"The value of the key 'index' is: {index_value}")
-                        index_found = True
-                        break
-        else:
-            self.logger.warning("No logsource found in the rule, using default index 'logs-*'")
+        indices = []
+        pending = [index]
+        while pending:
+            value = pending.pop(0)
+            if isinstance(value, list):
+                pending = value + pending
+            elif isinstance(value, str):
+                indices += [name.strip() for name in value.split(",") if name.strip()]
+            else:
+                raise ValueError(f"Index name in pipeline is malformed: {index}")
 
-        if not index_found:
-            self.logger.warning("No index value found for the rule, using default index 'logs-*'")
+        self.logger.info(f"The value of the key 'index' is: {indices}")
+        self._index_name = indices
 
-        if isinstance(index_value, str):
-            self._index_name = [index_value]
-        elif isinstance(index_value, list):
-            self._index_name = index_value
-        else:
-            self.logger.error("Index name in pipeline is missing or malformed")
-            raise ValueError("Index name in pipeline is missing or malformed")
+    def raw_index(self, rule_content):
+        """Return the index a raw EQL rule reads, its custom index or logs-*"""
+
+        index = rule_content.get("custom", {}).get("index", "logs-*")
+        return [index] if isinstance(index, str) else index
 
     def kibana_request(self, method, **kwargs):
         """Send a request to the Kibana detection engine rules API"""
@@ -566,19 +574,27 @@ class ElasticPlatform(AbstractPlatform):
         )
 
     def remove_rule(self, rule_content, rule_converted=None, rule_file=None):
-        """Remove an analytic rule in Elastic"""
+        """Remove an analytic rule in Elastic, a rule already gone included"""
         response = self.kibana_request("delete", params={"rule_id": rule_content["id"]})
         if response.status_code == 200:
             return response.json()
-        else:
-            return False
+        if response.status_code == 404:
+            self.logger.info(f"Rule {rule_content['id']} is already absent from Kibana")
+            return None
+        raise Exception(response.text)
 
     def get_rule(self, rule_id):
+        """Return a rule, False when Kibana does not have it
+
+        Any other refusal, such as a missing privilege, is an error: taking it
+        for an absent rule would have export create the rule again.
+        """
         response = self.kibana_request("get", params={"rule_id": rule_id})
         if response.status_code == 200:
             return response.json()
-        else:
+        if response.status_code == 404:
             return False
+        raise Exception(response.text)
 
     def check_rule_changes(self, existing_rule, new_rule):
         fields = [
@@ -828,13 +844,7 @@ class ElasticPlatform(AbstractPlatform):
             rule_converted = self.cleanup_esql_query(rule_converted)
 
         if language == "eql" and self._raw:
-            self._index_name = ["logs-*"]
-
-        if language == "eql" and self._raw and "custom" in rule_content and "index" in rule_content["custom"]:
-            if isinstance(rule_content["custom"]["index"], str):
-                self._index_name = [rule_content["custom"]["index"]]
-            else:
-                self._index_name = rule_content["custom"]["index"]
+            self._index_name = self.raw_index(rule_content)
 
 
         max_signals = self._max_signals
@@ -960,25 +970,29 @@ class ElasticPlatform(AbstractPlatform):
             filter={"range": {"@timestamp": {"gte": range_gte or self._eql_search_range_gte}}},
         )
         search_id = response["id"]
-        es_client.eql.get_status(id=search_id)
-        while es_client.eql.get_status(id=search_id)["is_running"]:
-            self.logger.debug(f"Query {search_id} is still running")
-            # print(es_client.eql.get_status(id=search_id))
-            time.sleep(10)
+        try:
+            # Waiting on its own search through the get API needs no cluster
+            # privilege, unlike the status API
+            while response.get("is_running"):
+                self.logger.debug(f"Query {search_id} is still running")
+                response = es_client.eql.get(id=search_id, wait_for_completion_timeout="10s")
+        finally:
+            # Left behind, an async search is kept for five days
+            es_client.eql.delete(id=search_id)
         self.logger.debug(f"Query {search_id} is done")
-        results = es_client.eql.get(id=search_id)
-        es_client.eql.delete(id=search_id)
-        if "hits" in results:
-            return results["hits"]["total"]["value"]
-        else:
-            return None
+
+        if "hits" in response:
+            return response["hits"]["total"]["value"]
+        return None
 
     def run_esql_search(self, query, es_client=None, range_gte=None):
+        # Count on the cluster: the rows returned stop at the default LIMIT 1000
         response = es_client.esql.query(
-            query=query,
+            query=f"{query}\n| STATS droid_hits = COUNT(*)",
             filter={"range": {"@timestamp": {"gte": range_gte or self._esql_search_range_gte}}},
         )
-        return len(response.get("values", []))
+        values = response.get("values") or [[0]]
+        return values[0][0]
 
     def run_elastic_search(self, rule_converted, language=None, rule_content=None):
 
@@ -987,6 +1001,8 @@ class ElasticPlatform(AbstractPlatform):
         index = self._index_name
         if rule_content and "custom" in rule_content and "raw_language" in rule_content["custom"]:
             language = rule_content["custom"]["raw_language"]
+        if self._raw and language == "eql":
+            index = self.raw_index(rule_content)
         self.logger.debug(f"Searching with the {language} language")
         # A rule lookback is expressed in days, which Elastic takes as date math
         days_ago = get_search_days_ago(rule_content, None, self.logger)
