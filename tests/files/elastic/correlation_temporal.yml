@@ -1,0 +1,47 @@
+title: Vault Sign-In Failure
+id: 0e0b5a52-1d6f-4f0b-8f5e-2b3c4d5e6f70
+name: vault_signin_failure
+status: test
+description: A sign-in to the vault failed.
+author: Hermes Conrad
+date: 2026-11-07
+logsource:
+    product: vault
+    service: signin_attempts
+detection:
+    selection:
+        category: credentials_failed
+    condition: selection
+level: low
+---
+title: Vault Sign-In Success
+id: 1f1c6b63-2e7a-4a1c-9a6f-3c4d5e6f7a81
+name: vault_signin_success
+status: test
+description: A sign-in to the vault succeeded.
+author: Hermes Conrad
+date: 2026-11-07
+logsource:
+    product: vault
+    service: signin_attempts
+detection:
+    selection:
+        category: success
+    condition: selection
+level: low
+---
+title: Vault Success After Failures
+id: 4c4f9e96-5bad-4d4f-ad9c-6f7a8b9cadb4
+status: test
+description: A failed and a successful sign-in for the same account within ten minutes.
+author: Hermes Conrad
+date: 2026-11-07
+correlation:
+    type: temporal
+    rules:
+        - vault_signin_failure
+        - vault_signin_success
+    group-by:
+        - target_user.email
+    timespan: 10m
+level: high

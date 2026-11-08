@@ -9,13 +9,14 @@ from typing import Optional
 from rich import print
 from sigma.plugins import InstalledSigmaPlugins
 from sigma.conversion.base import Backend, SigmaCollection
+from sigma.correlations import SigmaCorrelationRule
 from sigma.exceptions import SigmaTransformationError
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.exceptions import SigmaConversionError
 from droid.search import search_rule
 from droid.export import export_rule
 from droid.integrity import integrity_rule
-from droid.platforms.elastic import ElasticPlatform
+from droid.platforms.elastic import ElasticPlatform, eql_backend, esql_backend
 from droid.platforms.registry import get_platform
 from droid.color import ColorLogger
 from droid.rule_loader import load_rule_content
@@ -162,6 +163,44 @@ class Conversion:
         return False
 
     @staticmethod
+    def _eql_correlation_incompatibility(rule_content):
+        """Tell why EQL cannot express a correlation as the rule means it
+
+        Only event_count with gte (a sequence `with runs=N`, at least N events)
+        and temporal (a sample) come out as the rule means them. The backend
+        renders any other event_count condition as at least N events too,
+        value_count as a sequence joined on the counted field, which matches N
+        events sharing one value instead of N distinct ones, and
+        temporal_ordered as a query Elasticsearch cannot parse.
+
+        Return: the reason as a str, or None when EQL renders it faithfully
+        """
+
+        correlation = rule_content.get("correlation") or {}
+        correlation_type = correlation.get("type")
+        if correlation_type == "temporal":
+            return None
+        if correlation_type == "event_count":
+            if set((correlation.get("condition") or {}).keys()) == {"gte"}:
+                return None
+            return "EQL only counts at least a number of events, the condition must be gte"
+        if correlation_type == "value_count":
+            return "EQL matches events sharing the counted value instead of distinct values"
+        return f"EQL cannot express a {correlation_type} correlation"
+
+    @staticmethod
+    def _converted_rule(sigma_collection, rule_converted):
+        """Return the rule of the collection the query was converted from"""
+
+        for rule in sigma_collection.rules:
+            try:
+                if rule_converted in rule.get_conversion_result():
+                    return rule
+            except SigmaConversionError:
+                continue
+        return None
+
+    @staticmethod
     def _rule_has_regex_modifier(rule_content) -> bool:
         """Check if a Sigma rule uses the |re (regex) modifier in its detection section.
 
@@ -264,7 +303,22 @@ class Conversion:
             )
             return None
 
+        # The EQL backend turns some correlations into queries that do not
+        # mean what the rule says
+        if self._platform_name == "eql" and is_correlation_rule:
+            incompatibility = self._eql_correlation_incompatibility(rule_content)
+            if incompatibility:
+                self.logger.warning(
+                    f"Rule not compatible: {rule_file} - {incompatibility}, use esql",
+                    extra={"rule_file": rule_file, "rule_content": rule_content}
+                )
+                return None
+
         backend_class = backends[self.ms_cloud_kusto() or self._platform_name]
+        if self._platform_name == "esql":
+            backend_class = esql_backend(backend_class)
+        elif self._platform_name == "eql":
+            backend_class = eql_backend(backend_class)
         if pipeline_config:
             pipeline = pipeline_resolver.resolve(pipeline_config)
         else:
@@ -280,10 +334,19 @@ class Conversion:
             self.logger.debug(f"Applying default filters from {self._filters_directory}")
 
         sigma_rule = self.init_sigma_rule(rule_file, customer_filter_directory)
-        rule_converted = backend.convert(sigma_rule, self._format)[0]
+        queries = backend.convert(sigma_rule, self._format)
+        rule_converted = queries[0]
+        if is_correlation_rule:
+            # The backend emits every rule the correlation does not reference
+            # ahead of it: deploy the correlation's own query
+            correlation = next(
+                (rule for rule in sigma_rule.rules if isinstance(rule, SigmaCorrelationRule)), None
+            )
+            if correlation is not None and correlation.get_conversion_result():
+                rule_converted = correlation.get_conversion_result()[0]
         # For esql and eql backend only
         if isinstance(platform, ElasticPlatform):
-            platform.get_index_name(pipeline, rule_content)
+            platform.get_index_name(self._converted_rule(sigma_rule, rule_converted))
         self.logger.info(f"Successfully convert the rule {rule_file}", extra={"rule_file": rule_file, "rule_content": rule_content, "rule_format": self._format, "rule_converted": rule_converted})
         return rule_converted
 

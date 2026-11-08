@@ -81,6 +81,10 @@ def _elastic_basic_auth(cfg: dict, params: Any) -> bool:
     return cfg.get("auth_method") == "basic" and _is_deploy_op(cfg, params)
 
 
+def _elastic_api_key_auth(cfg: dict, params: Any) -> bool:
+    return cfg.get("auth_method") == "api_key" and _is_deploy_op(cfg, params)
+
+
 # ---------------------------------------------------------------------------
 # Shared env-var group definitions
 # ---------------------------------------------------------------------------
@@ -135,6 +139,12 @@ _ELASTIC_ENV_GROUPS: list[EnvVarGroup] = [
         mappings=[
             EnvVarMapping("DROID_ELASTIC_USERNAME", "username", required=True),
             EnvVarMapping("DROID_ELASTIC_PASSWORD", "password", required=True),
+        ],
+    ),
+    EnvVarGroup(
+        condition=_elastic_api_key_auth,
+        mappings=[
+            EnvVarMapping("DROID_ELASTIC_API_KEY", "api_key", required=True),
         ],
     ),
 ]

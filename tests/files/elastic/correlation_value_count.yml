@@ -1,0 +1,49 @@
+title: Vault Sign-In Failure
+id: 0e0b5a52-1d6f-4f0b-8f5e-2b3c4d5e6f70
+name: vault_signin_failure
+status: test
+description: A sign-in to the vault failed.
+author: Hermes Conrad
+date: 2026-11-07
+logsource:
+    product: vault
+    service: signin_attempts
+detection:
+    selection:
+        category: credentials_failed
+    condition: selection
+level: low
+---
+title: Vault Sign-In Success
+id: 1f1c6b63-2e7a-4a1c-9a6f-3c4d5e6f7a81
+name: vault_signin_success
+status: test
+description: A sign-in to the vault succeeded.
+author: Hermes Conrad
+date: 2026-11-07
+logsource:
+    product: vault
+    service: signin_attempts
+detection:
+    selection:
+        category: success
+    condition: selection
+level: low
+---
+title: Vault Account Signing In From Many Planets
+id: 3b3e8d85-4a9c-4c3e-9c8b-5e6f7a8b9ca3
+status: test
+description: One account signed in successfully from three planets within an hour.
+author: Hermes Conrad
+date: 2026-11-07
+correlation:
+    type: value_count
+    rules:
+        - vault_signin_success
+    group-by:
+        - target_user.email
+    timespan: 1h
+    condition:
+        field: country
+        gte: 3
+level: high

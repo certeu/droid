@@ -1,0 +1,13 @@
+name: Process creation on Elastic
+priority: 90
+
+transformations:
+
+- id: index_set_state
+  type: set_state
+  key: "index"
+  val: "logs-endpoint.events.process-*"
+  rule_conditions:
+    - type: logsource
+      product: windows
+      category: process_creation
