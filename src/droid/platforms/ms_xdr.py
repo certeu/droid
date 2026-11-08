@@ -533,6 +533,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         else:
             severity = rule_content["level"]
         tactics = self.build_tactics(rule_content, rule_file)
+        if not tactics:
+            self.logger.warning(
+                f"Rule {rule_file} has no ATT&CK tactic tag: its alerts carry no tactic, and the ones deployed are left as they are"
+            )
         alert_rule = {
             # Graph v1.0 has the client name a rule it creates
             "id": graph_rule_id(rule_content["id"]),
@@ -545,13 +549,16 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                     "description": rule_content["description"],
                     "severity": severity,
                     "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                    "tactics": tactics,
                     "entityMappings": every_entity_category(DEFAULT_ENTITY_MAPPINGS),
                 },
                 "organizationalScope": None,  # TODO: Find out what this does
                 "automatedActions": self.parse_actions([], rule_file=rule_file),
             },
         }
+        if tactics:
+            # Never sent empty: Graph then accepts the update but silently
+            # drops the whole alert template and the automated actions in it
+            alert_rule["detectionAction"]["alertTemplate"]["tactics"] = tactics
 
         # The rule overrides its group, which overrides the configuration. Only
         # the value that wins is translated, so a configuration default with no
@@ -796,10 +803,12 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         }
         for field in ("title", "description", "severity", "recommendedActions"):
             compared[field] = (existing_template.get(field) or None, new_template.get(field) or None)
-        compared["tactics"] = (
-            _tactic_triples(existing_template.get("tactics")),
-            _tactic_triples(new_template["tactics"]),
-        )
+        if "tactics" in new_template:
+            # Not sent for a rule without tactics, which keeps the deployed ones
+            compared["tactics"] = (
+                _tactic_triples(existing_template.get("tactics")),
+                _tactic_triples(new_template["tactics"]),
+            )
         compared["automatedActions"] = (
             _automated_action_set((existing_rule.get("detectionAction") or {}).get("automatedActions")),
             _automated_action_set(new_rule["detectionAction"]["automatedActions"]),

@@ -335,10 +335,21 @@ def test_without_attack_data_techniques_go_under_the_tagged_tactics(platform, pu
     ]
 
 
-def test_a_rule_without_attack_tags_has_no_tactics(platform, pushed):
+def test_a_rule_without_attack_tags_sends_no_tactics(platform, pushed):
+    """Graph accepts an update with empty tactics but silently drops the whole
+    alert template and the automated actions: seen on a tenant."""
+
     platform.create_rule(build_rule_content(tags=["detection.threat-hunting"]), "DeviceEvents", RULE_FILE)
 
-    assert alert_template(pushed[0])["tactics"] == []
+    assert "tactics" not in alert_template(pushed[0])
+
+
+def test_the_tactics_deployed_on_a_rule_without_tags_are_not_a_change(platform, pushed):
+    platform.create_rule(build_rule_content(tags=[]), "DeviceEvents", RULE_FILE)
+    deployed = copy.deepcopy(pushed[0])
+    deployed["detectionAction"]["alertTemplate"]["tactics"] = [{"tactic": "Impact", "techniques": [{"technique": "T1565"}]}]
+
+    assert platform.rule_differences(deployed, pushed[0]) == []
 
 
 

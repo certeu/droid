@@ -16,6 +16,7 @@ SIGMA_RULE = {
     "description": "A suspicious process was started",
     "level": "high",
     "status": "stable",
+    "tags": ["attack.execution"],
     "logsource": {"category": "process_creation", "product": "windows"},
 }
 
