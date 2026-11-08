@@ -436,6 +436,154 @@ def test_rule_changes_detect_alert_suppression():
 
 
 # ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+ACTIONS = {
+    "alerts_index": {"type": "index", "connector_id": "planet-express-alerts"},
+    "dispatch_email": {
+        "type": "email",
+        "connector_id": "planet-express-smtp",
+        "to": ["leela@planet-express.local"],
+        "cc": ["hermes@planet-express.local"],
+    },
+    "dispatch_webhook": {"type": "webhook", "connector_id": "planet-express-dispatch", "throttle": "1h"},
+    "kitchen_log": {"type": "server_log", "connector_id": "planet-express-log", "level": "warn"},
+}
+
+
+def actions_of(payload):
+    return {action["id"]: action for action in payload["actions"]}
+
+
+def test_export_without_actions_configured_sends_none():
+    assert export(build_platform())["actions"] == []
+
+
+def test_export_attaches_every_configured_action():
+    actions = actions_of(export(build_platform(actions=ACTIONS)))
+
+    assert {action["action_type_id"] for action in actions.values()} == {
+        ".index", ".email", ".webhook", ".server-log"
+    }
+    assert all(action["group"] == "default" for action in actions.values())
+
+
+def test_index_action_indexes_each_alert_whole():
+    action = actions_of(export(build_platform(actions=ACTIONS)))["planet-express-alerts"]
+
+    assert action["frequency"] == {"summary": False, "notifyWhen": "onActiveAlert", "throttle": None}
+    # A string document is not JSON escaped: only the serialized alert goes in
+    assert action["params"]["documents"] == ['{"alert":{{{context.alerts}}}}']
+
+
+def test_index_action_summary_indexes_one_document_per_run():
+    actions = {"alerts_index": {**ACTIONS["alerts_index"], "per_alert": False}}
+
+    action = actions_of(export(build_platform(actions=actions)))["planet-express-alerts"]
+
+    assert action["frequency"] == {"summary": True, "notifyWhen": "onActiveAlert", "throttle": None}
+    assert action["params"]["documents"][0]["alerts_count"] == "{{state.signals_count}}"
+
+
+def test_index_action_document_can_be_overridden():
+    document = {"rule": "{{context.rule.name}}", "delivery": "{{alert.id}}"}
+    actions = {"alerts_index": {**ACTIONS["alerts_index"], "document": document}}
+
+    action = actions_of(export(build_platform(actions=actions)))["planet-express-alerts"]
+
+    assert action["params"] == {"documents": [document]}
+
+
+def test_email_action_sends_a_summary_to_the_recipients():
+    action = actions_of(export(build_platform(actions=ACTIONS)))["planet-express-smtp"]
+
+    assert action["frequency"] == {"summary": True, "notifyWhen": "onActiveAlert", "throttle": None}
+    assert action["params"]["to"] == ["leela@planet-express.local"]
+    assert action["params"]["cc"] == ["hermes@planet-express.local"]
+    assert "bcc" not in action["params"]
+    assert "{{context.rule.name}}" in action["params"]["subject"]
+    assert "{{state.signals_count}}" in action["params"]["message"]
+
+
+def test_email_action_needs_a_recipient():
+    actions = {"dispatch_email": {"type": "email", "connector_id": "planet-express-smtp"}}
+
+    with pytest.raises(ValueError, match="dispatch_email"):
+        build_platform(actions=actions)
+
+
+def test_webhook_action_is_throttled():
+    action = actions_of(export(build_platform(actions=ACTIONS)))["planet-express-dispatch"]
+
+    assert action["frequency"] == {"summary": True, "notifyWhen": "onThrottleInterval", "throttle": "1h"}
+    assert '"rule_name":"{{context.rule.name}}"' in action["params"]["body"]
+
+
+def test_server_log_action_logs_at_the_configured_level():
+    action = actions_of(export(build_platform(actions=ACTIONS)))["planet-express-log"]
+
+    assert action["params"]["level"] == "warn"
+    assert "{{context.rule.name}}" in action["params"]["message"]
+
+
+@pytest.mark.parametrize(
+    "action, error",
+    [
+        ({"type": "carrier_pigeon", "connector_id": "c"}, "type"),
+        ({"type": "index"}, "connector_id"),
+        ({"type": "index", "connector_id": "c", "recipients": ["fry"]}, "recipients"),
+        ({"type": "index", "connector_id": "c", "per_alert": True, "throttle": "1h"}, "throttle"),
+        ({"type": "index", "connector_id": "c", "throttle": "a while", "per_alert": False}, "throttle"),
+        ({"type": "server_log", "connector_id": "c", "level": "loud"}, "level"),
+    ],
+)
+def test_invalid_action_is_rejected(action, error):
+    with pytest.raises(ValueError, match=error):
+        build_platform(actions={"broken": action})
+
+
+def test_rule_selects_its_actions():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": ["dispatch_email"]}}
+
+    payload = export(build_platform(actions=ACTIONS), rule)
+
+    assert list(actions_of(payload)) == ["planet-express-smtp"]
+
+
+def test_rule_can_opt_out_of_every_action():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": []}}
+
+    assert export(build_platform(actions=ACTIONS), rule)["actions"] == []
+
+
+def test_rule_selecting_an_unknown_action_is_an_error():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": ["dispatch_slurm"]}}
+
+    with pytest.raises(ValueError, match="dispatch_slurm"):
+        export(build_platform(actions=ACTIONS), rule)
+
+
+def test_rule_changes_ignore_the_uuid_kibana_gives_actions():
+    platform = build_platform(actions=ACTIONS)
+    deployed = export(platform)
+    existing = {
+        **deployed,
+        "actions": [{**action, "uuid": f"uuid-{n}"} for n, action in enumerate(deployed["actions"])],
+    }
+
+    assert platform.check_rule_changes(existing, deployed) is False
+
+
+def test_rule_changes_detect_a_changed_action():
+    platform = build_platform(actions=ACTIONS)
+    deployed = export(platform)
+    changed = export(build_platform(actions={**ACTIONS, "kitchen_log": {**ACTIONS["kitchen_log"], "level": "error"}}))
+
+    assert platform.check_rule_changes(deployed, changed) is True
+
+
+# ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
 

@@ -49,6 +49,85 @@ EQL_UNQUOTED_FIELD = unquoted_field_pattern(EQL_RESERVED_WORDS)
 
 ESQL_METADATA_FIELDS = "_id, _index, _version"
 
+# Kibana rule actions, each one running a connector created beforehand in
+# Kibana. Index and server log run on a Basic license, email and webhook
+# need Gold. Default templates use the Security rule action variables.
+SUMMARY_MESSAGE = (
+    "{{state.signals_count}} alert(s) raised by {{context.rule.name}}.\n\n"
+    "Severity: {{context.rule.severity}} (risk score {{context.rule.risk_score}})\n\n"
+    "{{context.rule.description}}\n\n"
+    "{{context.results_link}}"
+)
+ALERT_MESSAGE = (
+    "{{#context.alerts}}{{kibana.alert.reason}}{{/context.alerts}}\n\n"
+    "Severity: {{context.rule.severity}} (risk score {{context.rule.risk_score}})\n\n"
+    "{{context.rule.description}}\n\n"
+    "{{context.results_link}}"
+)
+SUMMARY_FIELDS = (
+    '"rule_id":"{{context.rule.rule_id}}","rule_name":"{{context.rule.name}}",'
+    '"severity":"{{context.rule.severity}}","risk_score":{{context.rule.risk_score}},'
+    '"results_link":"{{context.results_link}}"'
+)
+
+ACTION_TYPES = {
+    "index": {
+        "action_type_id": ".index",
+        "per_alert": True,
+        "params": ("document",),
+        # Nothing but the serialized alert: a string document is not JSON escaped,
+        # a rule name holding a quote would break it. The alert carries the rule.
+        "defaults": lambda per_alert: {
+            "documents": [
+                '{"alert":{{{context.alerts}}}}' if per_alert else {
+                    "rule_id": "{{context.rule.rule_id}}",
+                    "rule_name": "{{context.rule.name}}",
+                    "severity": "{{context.rule.severity}}",
+                    "risk_score": "{{context.rule.risk_score}}",
+                    "alerts_count": "{{state.signals_count}}",
+                    "results_link": "{{context.results_link}}",
+                }
+            ]
+        },
+    },
+    "server_log": {
+        "action_type_id": ".server-log",
+        "per_alert": False,
+        "params": ("level", "message"),
+        "defaults": lambda per_alert: {
+            "level": "info",
+            "message": (
+                "{{context.rule.name}}: {{#context.alerts}}{{kibana.alert.reason}}{{/context.alerts}}"
+                if per_alert else
+                "{{context.rule.name}}: {{state.signals_count}} alert(s) {{context.results_link}}"
+            ),
+        },
+    },
+    "email": {
+        "action_type_id": ".email",
+        "per_alert": False,
+        "params": ("to", "cc", "bcc", "subject", "message"),
+        "defaults": lambda per_alert: {
+            "subject": "[{{context.rule.severity}}] {{context.rule.name}}",
+            "message": ALERT_MESSAGE if per_alert else SUMMARY_MESSAGE,
+        },
+    },
+    "webhook": {
+        "action_type_id": ".webhook",
+        "per_alert": False,
+        "params": ("body",),
+        # The webhook connector JSON escapes {{ }} in the body, {{{ }}} is raw
+        "defaults": lambda per_alert: {
+            "body": (
+                "{" + SUMMARY_FIELDS + ',"alert":{{{context.alerts}}}}'
+                if per_alert else
+                "{" + SUMMARY_FIELDS + ',"alerts_count":{{state.signals_count}},"alerts":[{{{context.alerts}}}]}'
+            )
+        },
+    },
+}
+SERVER_LOG_LEVELS = ("trace", "debug", "info", "warn", "error", "fatal")
+
 TIME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
@@ -220,6 +299,11 @@ class ElasticPlatform(AbstractPlatform):
         self._additional_look_back_seconds = (
             time_to_seconds(self._additional_look_back) if self._additional_look_back else 0
         )
+
+        self._actions = {
+            name: self.build_action(name, action)
+            for name, action in (self._parameters.get("actions") or {}).items()
+        }
 
         # Alert suppression needs a Platinum license
         self._suppress_correlation_alerts = self._parameters.get("suppress_correlation_alerts", True)
@@ -459,6 +543,14 @@ class ElasticPlatform(AbstractPlatform):
         ]
         if new_rule.get("index"):
             fields.append("index")
+        # Kibana gives every action a uuid of its own
+        existing_rule = {
+            **existing_rule,
+            "actions": [
+                {key: value for key, value in action.items() if key != "uuid"}
+                for action in existing_rule.get("actions") or []
+            ],
+        }
         for field in fields:
             # Kibana returns empty lists for optional list fields never set
             if (existing_rule.get(field) or None) != (new_rule.get(field) or None):
@@ -518,6 +610,72 @@ class ElasticPlatform(AbstractPlatform):
             rest = " " + rest
 
         return f"{source} {clause}{rest}"
+
+    @staticmethod
+    def build_action(name, action):
+        """Build the Kibana rule action of an `actions` entry of the config"""
+
+        action = dict(action)
+        action_type = ACTION_TYPES.get(action.pop("type", None))
+        if action_type is None:
+            raise ValueError(f"ElasticPlatform: action '{name}' needs a type among {', '.join(ACTION_TYPES)}")
+
+        connector_id = action.pop("connector_id", None)
+        if not connector_id:
+            raise ValueError(f"ElasticPlatform: action '{name}' needs the connector_id of a Kibana connector")
+
+        per_alert = action.pop("per_alert", action_type["per_alert"])
+        throttle = action.pop("throttle", None)
+        if throttle is not None:
+            if per_alert:
+                raise ValueError(f"ElasticPlatform: action '{name}' can only throttle a summary, set per_alert = false")
+            if not re.fullmatch(r"\d+[smhd]", str(throttle)):
+                raise ValueError(f"ElasticPlatform: action '{name}' has an invalid throttle '{throttle}', e.g. 1h")
+
+        unknown = set(action) - set(action_type["params"])
+        if unknown:
+            raise ValueError(
+                f"ElasticPlatform: action '{name}' has unknown parameters {', '.join(sorted(unknown))}, "
+                f"expected {', '.join(action_type['params'])}"
+            )
+
+        params = action_type["defaults"](per_alert)
+        if "document" in action:
+            params["documents"] = [action.pop("document")]
+        params.update(action)
+
+        if action_type["action_type_id"] == ".email" and not any(params.get(key) for key in ("to", "cc", "bcc")):
+            raise ValueError(f"ElasticPlatform: action '{name}' needs recipients in to, cc or bcc")
+        if action_type["action_type_id"] == ".server-log" and params["level"] not in SERVER_LOG_LEVELS:
+            raise ValueError(
+                f"ElasticPlatform: action '{name}' has an invalid level '{params['level']}', "
+                f"expected {', '.join(SERVER_LOG_LEVELS)}"
+            )
+
+        return {
+            "group": "default",
+            "id": connector_id,
+            "action_type_id": action_type["action_type_id"],
+            "params": params,
+            "frequency": {
+                "summary": not per_alert,
+                "notifyWhen": "onThrottleInterval" if throttle else "onActiveAlert",
+                "throttle": throttle,
+            },
+        }
+
+    def rule_actions(self, rule_content):
+        """Return the actions of a rule, all of them unless it selects some"""
+
+        selected = rule_content.get("custom", {}).get("elastic_actions")
+        if selected is None:
+            return list(self._actions.values())
+
+        unknown = [name for name in selected if name not in self._actions]
+        if unknown:
+            raise ValueError(f"Unknown Elastic actions {', '.join(unknown)} in custom.elastic_actions")
+
+        return [self._actions[name] for name in selected]
 
     @staticmethod
     def correlation_group_by(query):
@@ -640,7 +798,7 @@ class ElasticPlatform(AbstractPlatform):
             "index": self._index_name,
             "query": rule_converted,
             "filters": [],
-            "actions": [],
+            "actions": self.rule_actions(rule_content),
         }
 
         # TODO: It might be a good idea to add more optional fields
@@ -680,7 +838,7 @@ class ElasticPlatform(AbstractPlatform):
             )
         except Exception as e:
             self.logger.error(
-                f"Could not export the rule {rule_file}",
+                f"Could not export the rule {rule_file} - error: {e}",
                 extra={
                     "rule_file": rule_file,
                     "rule_converted": rule_converted,
