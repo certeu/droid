@@ -2,6 +2,7 @@
 Module for Microsoft XDR
 """
 
+import copy
 import re
 import requests
 import time
@@ -48,6 +49,152 @@ THROTTLING_HEADERS = (
     "x-ms-resource-unit",
 )
 
+# Sigma attack.<tactic> tags, and the MITRE tactic names Graph expects
+MITRE_TACTICS = {
+    "reconnaissance": "Reconnaissance",
+    "resource-development": "ResourceDevelopment",
+    "initial-access": "InitialAccess",
+    "execution": "Execution",
+    "persistence": "Persistence",
+    "privilege-escalation": "PrivilegeEscalation",
+    "defense-evasion": "DefenseEvasion",
+    "credential-access": "CredentialAccess",
+    "discovery": "Discovery",
+    "lateral-movement": "LateralMovement",
+    "collection": "Collection",
+    "command-and-control": "CommandAndControl",
+    "exfiltration": "Exfiltration",
+    "impact": "Impact",
+    # ATT&CK v18 split Defense Evasion into these two, which Microsoft does
+    # not know: its validation still follows an earlier ATT&CK
+    "stealth": "DefenseEvasion",
+    "defense-impairment": "DefenseEvasion",
+}
+
+# The pairs Graph refuses when its ATT&CK disagrees with droid's
+INVALID_TECHNIQUE_PATTERN = re.compile(
+    r"Technique '(T[0-9]{4}(?:\.[0-9]{3})?)' is not a valid parent technique under tactic '([A-Za-z]+)'"
+)
+
+# custom.actions action names, the automatedActions collection each one fills,
+# and the identifiers it accepts: every one the removed responseActions did
+ACCOUNT_SID_IDENTIFIERS = ["accountSid", "initiatingProcessAccountSid", "requestAccountSid", "onPremSid"]
+ACCOUNT_OBJECT_ID_IDENTIFIERS = ["accountObjectId", "initiatingProcessAccountObjectId", "servicePrincipalId", "recipientObjectId"]
+AUTOMATED_ACTIONS = {
+    "forceUserPasswordReset": ("forceUserPasswordResets", ACCOUNT_SID_IDENTIFIERS),
+    "disableUser": ("disableUsers", ACCOUNT_SID_IDENTIFIERS),
+    "markUserAsCompromised": ("markUsersAsCompromised", ACCOUNT_OBJECT_ID_IDENTIFIERS),
+    "stopAndQuarantineFile": ("stopAndQuarantineFiles", ["sha1", "initiatingProcessSHA1", "deviceId"]),
+    "blockFile": ("blockFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
+    "allowFile": ("allowFiles", ["sha256", "sha1", "initiatingProcessSHA1", "initiatingProcessSHA256"]),
+    "restrictAppExecution": ("restrictAppExecutions", ["deviceId"]),
+    "initiateInvestigation": ("initiateInvestigations", ["deviceId"]),
+    "runAntivirusScan": ("runAntivirusScans", ["deviceId"]),
+    "collectInvestigationPackage": ("collectInvestigationPackages", ["deviceId"]),
+    "isolateDevice": ("isolateDevices", ["deviceId"]),
+}
+
+# The identifiers of the removed responseActions, and the automated action
+# property and advanced hunting column each of them stands for
+IDENTIFIER_COLUMNS = {
+    "deviceId": ("deviceIdColumn", "DeviceId"),
+    "accountSid": ("accountSidColumn", "AccountSid"),
+    "initiatingProcessAccountSid": ("accountSidColumn", "InitiatingProcessAccountSid"),
+    "requestAccountSid": ("accountSidColumn", "RequestAccountSid"),
+    "onPremSid": ("accountSidColumn", "OnPremSid"),
+    "accountObjectId": ("accountObjectIdColumn", "AccountObjectId"),
+    "initiatingProcessAccountObjectId": ("accountObjectIdColumn", "InitiatingProcessAccountObjectId"),
+    "servicePrincipalId": ("accountObjectIdColumn", "ServicePrincipalId"),
+    "recipientObjectId": ("accountObjectIdColumn", "RecipientObjectId"),
+    "sha1": ("sha1Column", "SHA1"),
+    "initiatingProcessSHA1": ("sha1Column", "InitiatingProcessSHA1"),
+    "sha256": ("sha256Column", "SHA256"),
+    "initiatingProcessSHA256": ("sha256Column", "InitiatingProcessSHA256"),
+}
+
+# The entities a rule is created with when neither the rule nor its log source
+# maps any. Microsoft does not derive any for a new rule, whose alerts then
+# group into incidents poorly. The device is what droid mapped by default with
+# impactedAssets.
+DEFAULT_ENTITY_MAPPINGS = {"hosts": [{"deviceIdColumn": "DeviceId"}]}
+
+# query_period values droid accepts, the ones of the schedule.period Microsoft
+# removed, and the schedule.frequency replacing each of them
+QUERY_PERIOD_FREQUENCIES = {
+    # Continuous (near real-time): undocumented, confirmed on a tenant, where a
+    # rule deployed with it shows as NRT
+    "0": "PT0S",
+    "1H": "PT1H",
+    "3H": "PT3H",
+    "12H": "PT12H",
+    "24H": "P1D",
+}
+
+
+def _duration_seconds(duration):
+    """Length of an ISO 8601 duration such as PT1H or P1D, so that two
+    spellings of the same frequency (P1D, PT24H) compare equal. A value this
+    does not understand is returned as is, and only equals itself."""
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", str(duration))
+    if not duration or not match:
+        return duration
+    days, hours, minutes, seconds = (int(value or 0) for value in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def graph_rule_id(rule_id):
+    """The id Graph accepts for a rule: letters, digits, dashes and
+    underscores, starting with a letter, 100 characters at most. A Sigma id
+    is a UUID, which more often than not starts with a digit."""
+    return ("droid-" + re.sub(r"[^A-Za-z0-9_-]", "-", str(rule_id)))[:100]
+
+
+def every_entity_category(entity_mappings):
+    """An entityMappings payload naming every category, empty when unmapped
+
+    Graph merges the alertTemplate of an update into the stored one: a
+    category left out of the payload would keep its stored mappings, and
+    differ from the rule on every export after.
+    """
+    payload = {category: [] for category in MicrosoftXDRPlatform.ENTITY_MAPPING_COLUMNS}
+    payload.update(copy.deepcopy(entity_mappings))
+    return payload
+
+
+def _tactic_triples(tactics):
+    """Reduce alertTemplate tactics to (tactic, technique, sub-technique)
+    triples, so that order and empty collections Graph fills in do not count
+    as a change"""
+    triples = set()
+    for tactic in tactics or []:
+        for technique in tactic.get("techniques") or [{}]:
+            for sub_technique in technique.get("subTechniques") or [None]:
+                triples.add((tactic.get("tactic"), technique.get("technique"), sub_technique))
+    return triples
+
+
+def _automated_action_set(automated_actions):
+    """Reduce automatedActions to the non-empty actions droid manages, ignoring
+    order and the empty collections and @odata annotations Graph returns
+
+    The collections droid has no custom.actions for, the email actions, are
+    left out: one set on the portal would otherwise differ on every export.
+    """
+    managed = {collection for collection, _ in AUTOMATED_ACTIONS.values()}
+    reduced = {}
+    for collection, entries in (automated_actions or {}).items():
+        if collection not in managed or not isinstance(entries, list) or not entries:
+            continue
+        reduced[collection] = sorted(
+            tuple(sorted(
+                (key, tuple(value) if isinstance(value, list) else value)
+                for key, value in entry.items()
+                if not key.startswith("@odata") and value not in (None, "", [])
+            ))
+            for entry in entries
+        )
+    return reduced
+
 
 class MicrosoftXDRPlatform(AbstractPlatform):
 
@@ -62,6 +209,13 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             self.logger.warning("Invalid 'days_ago' value. Expected a value between 1 and 30, but got %d. Defaulting to 1")
             self._search_daysago = 1
         self._query_period_groups = self._parameters.get("rule_parameters", {}).get("query_period_groups")
+        self._entity_mappings_groups = self._parameters.get("rule_parameters", {}).get("entity_mappings_groups") or {}
+        for group, settings in self._entity_mappings_groups.items():
+            # A mistake in a group would fail every rule of its log source: say
+            # so once, when droid starts
+            if not settings.get("entity_mappings"):
+                raise self._entity_mapping_error("A group needs non-empty 'entity_mappings'", f"entity_mappings_groups.{group}")
+            self.parse_entity_mappings(settings["entity_mappings"], rule_file=f"entity_mappings_groups.{group}")
         if "query_period" not in self._parameters:
             raise Exception('MicrosoftXDRPlatform: "query_period" parameter is required.')
         else:
@@ -88,7 +242,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self._client_secret = self._parameters["client_secret"]
             self._cert_pass = self._parameters.get("cert_pass", None)
         elif "default" in (self._parameters["search_auth"] or self._parameters["export_auth"]):
-            pass
+            # The token comes from the environment, which knows its tenant: the
+            # configured tenant_id only names the one a single tenant run
+            # targets, and keys the token cache
+            self._tenant_id = self._parameters.get("tenant_id")
         else:
             raise Exception('MicrosoftXDRPlatform: "search_auth" and "export_auth" parameters must be one of "default" or "app" or "credential_file".')
         if "alert_prefix" in self._parameters:
@@ -103,7 +260,9 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         
         self._max_throttle_wait = self._parameters.get("max_throttle_wait", DEFAULT_MAX_THROTTLE_WAIT)
 
-        self._api_base_url = "https://graph.microsoft.com/beta"
+        # v1.0 rather than beta: Microsoft does not support beta in production,
+        # and changed the custom detection rules there under droid
+        self._api_base_url = "https://graph.microsoft.com/v1.0"
         self._token_cache = {}
         # Monotonic deadline per tenant while a throttling window is known to be open
         self._throttled_until = {}
@@ -163,6 +322,10 @@ class MicrosoftXDRPlatform(AbstractPlatform):
             rule, status_code = self._get(
                 url="/security/rules/detectionRules", params=params, tenant_id=tenant_id
             )
+            # A refused lookup has no "value" either: taken for an absent rule,
+            # a removal would report success, and an export create a duplicate
+            if status_code != 200 or not isinstance(rule, dict):
+                raise Exception(f"Graph answered {status_code}: {get_error_message(rule)}")
             rule_value = rule.get("value", [])
             if isinstance(rule_value, list) and len(rule_value) > 0:
                 time.sleep(6)
@@ -340,27 +503,24 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         return token, expiration
 
     def process_query_period(self, query_period: str, rule_file: str):
-        """Process the query period time
-        :return: a query period time
+        """Translate a query_period into the schedule.frequency Graph expects
+
+        Rules and configurations keep the values of the removed schedule.period,
+        so upgrading droid does not mean rewriting them.
+        :return: an ISO 8601 duration
         """
         query_period = str(query_period).upper()
-        if query_period in [
-            "0",
-            "1H",
-            "3H",
-            "12H",
-            "24H",
-        ]:
-            return query_period
-        else:
-            self.logger.error(
-                f"Sigma Query Period must be one of '0', '1H', '3H', '12H' or '24H', used value provided in the config {self._query_period} - {rule_file}"
-            )
-            raise
+        if query_period in QUERY_PERIOD_FREQUENCIES:
+            return QUERY_PERIOD_FREQUENCIES[query_period]
+        message = f"query_period must be one of {list(QUERY_PERIOD_FREQUENCIES)}, got '{query_period}' - {rule_file}"
+        self.logger.error(message)
+        raise ValueError(message)
 
-    def create_rule(self, rule_content, rule_converted, rule_file):
-        """
-        Create an Custom Detection Rule in Microsoft XDR
+    def build_alert_rule(self, rule_content, rule_converted, rule_file):
+        """Build the detection rule droid deploys for a rule
+
+        Export pushes it, and integrity compares it with the deployed rule, so
+        that both agree on what the rule should be.
         """
 
         # Handling the display name
@@ -377,73 +537,51 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         # Handling the status of the alert
 
         if rule_content.get("custom", {}).get("disabled") is True:
-            enabled = False
-            self.logger.info(f"Disabling the rule {rule_file}")
+            status = "disabled"
+            self.logger.debug(f"Disabling the rule {rule_file}")
         else:
-            enabled = True
+            status = "enabled"
 
         # Handling the severity
         if rule_content["level"] == "critical":
             severity = "high"
         else:
             severity = rule_content["level"]
-        mitreTechniques = []
-        category = None
-        if "tags" in rule_content:
-            for tag in rule_content["tags"]:
-                if tag.lower().startswith("attack."):
-                    t_value = re.match(r"attack\.([tT][0-9]{4}(\.[0-9]{3})?)", tag)
-                    if t_value:
-                        technique = t_value.group(1).upper()
-                        mitreTechniques.append(technique)
-                    c_value = tag.replace("attack.", "").lower().strip()
-                    if c_value in [
-                        "reconnaissance",
-                        "resource-development",
-                        "initial-access",
-                        "execution",
-                        "persistence",
-                        "privilege-escalation",
-                        "defense-evasion",
-                        "credential-access",
-                        "discovery",
-                        "lateral-movement",
-                        "collection",
-                        "command-and-control",
-                        "exfiltration",
-                        "impact",
-                    ]:
-                        category = c_value.replace("-", " ").title().replace(" ", "")
-        if not category:
-            category = "Execution"  # Fallback... this should never happen
-        try:
-            alert_rule = {
-                "displayName": display_name,
-                "isEnabled": enabled,
-                "queryCondition": {"queryText": rule_converted},
-                "schedule": {"period": self._query_period.upper()},
-                "detectionAction": {
-                    "alertTemplate": {
-                        "title": alert_title,
-                        "description": rule_content["description"],
-                        "severity": severity,
-                        "category": category,
-                        "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
-                        "mitreTechniques": mitreTechniques,
-                        "impactedAssets": [  # This is default, it can be overwritten by the custom rule fields
-                            {
-                                "@odata.type": "#microsoft.graph.security.impactedDeviceAsset",
-                                "identifier": "deviceId",
-                            },
-                        ],
-                    },
-                    "organizationalScope": None,  # TODO: Find out what this does
-                    "responseActions": [],  # TODO: Define Actions in custom rule fields
+        tactics = self.build_tactics(rule_content, rule_file)
+        if not tactics:
+            self.logger.warning(
+                f"Rule {rule_file} has no ATT&CK tactic tag: its alerts carry no tactic, and the ones deployed are left as they are"
+            )
+        alert_rule = {
+            # Graph v1.0 has the client name a rule it creates
+            "id": graph_rule_id(rule_content["id"]),
+            "displayName": display_name,
+            "status": status,
+            "queryCondition": {"queryText": rule_converted},
+            "detectionAction": {
+                "alertTemplate": {
+                    "title": alert_title,
+                    "description": rule_content["description"],
+                    "severity": severity,
+                    "recommendedActions": None,  # TODO: Check if we can add recommended actions, for example the falsepositives?
                 },
-            }
-        except Exception as e:
-            self.logger.error(e)
+                "organizationalScope": None,  # TODO: Find out what this does
+                "automatedActions": self.parse_actions([], rule_file=rule_file),
+            },
+        }
+        entity_mappings = self.rule_entity_mappings(rule_content, rule_file)
+        if entity_mappings is not None:
+            alert_rule["detectionAction"]["alertTemplate"]["entityMappings"] = every_entity_category(entity_mappings)
 
+        if tactics:
+            # Never sent empty: Graph then accepts the update but silently
+            # drops the whole alert template and the automated actions in it
+            alert_rule["detectionAction"]["alertTemplate"]["tactics"] = tactics
+
+        # The rule overrides its group, which overrides the configuration. Only
+        # the value that wins is translated, so a configuration default with no
+        # frequency does not fail the rules that override it.
+        query_period = self._query_period
         if self._query_period_groups:
             query_period_group = get_pipeline_group_match(
                 rule_content, self._query_period_groups
@@ -452,28 +590,30 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 self.logger.debug(
                     f"Applying the query_period value from group {query_period_group}"
                 )
-                alert_rule["schedule"]["period"] = self.process_query_period(
-                    self._query_period_groups[query_period_group]["query_period"],
-                    rule_file,
-                )
+                query_period = self._query_period_groups[query_period_group]["query_period"]
+        query_period = rule_content.get("custom", {}).get("query_period", query_period)
+        alert_rule["schedule"] = {
+            "frequency": self.process_query_period(query_period, rule_file)
+        }
 
         if "custom" in rule_content:
-            if "query_period" in rule_content["custom"]:
-                alert_rule["schedule"]["period"] = self.process_query_period(
-                    rule_content["custom"]["query_period"], rule_file
-                )
             if "actions" in rule_content["custom"]:
-                responseActions = self.parse_actions(
+                alert_rule["detectionAction"]["automatedActions"] = self.parse_actions(
                     rule_content["custom"]["actions"], rule_file=rule_file
                 )
-                alert_rule["detectionAction"]["responseActions"] = responseActions
             if "impactedAssets" in rule_content["custom"]:
-                impactedAssets = self.parse_impactedAssets(
-                    rule_content["custom"]["impactedAssets"], rule_file=rule_file
+                self.logger.warning(
+                    f"custom.impactedAssets is deprecated by Microsoft and no longer pushed - migrate to custom.xdr_entity_mappings - {rule_file}"
                 )
-                alert_rule["detectionAction"]["alertTemplate"][
-                    "impactedAssets"
-                ] = impactedAssets
+
+        return alert_rule
+
+    def create_rule(self, rule_content, rule_converted, rule_file):
+        """
+        Create an Custom Detection Rule in Microsoft XDR
+        """
+
+        alert_rule = self.build_alert_rule(rule_content, rule_converted, rule_file)
 
         if self._export_mssp:
             if self._export_list_mssp:
@@ -569,49 +709,170 @@ class MicrosoftXDRPlatform(AbstractPlatform):
                 )
                 raise
 
+    def _attack_tactics_of(self, technique, rule_file):
+        """The Graph tactics a technique belongs to in ATT&CK, or None when
+        the ATT&CK data cannot be loaded or does not know the technique"""
+        try:
+            # Loaded here: pySigma downloads ATT&CK on first use, which only
+            # rules carrying techniques need
+            from sigma.data import mitre_attack
+            mapping = mitre_attack.mitre_attack_techniques_tactics_mapping
+        except Exception as e:
+            self.logger.warning(f"Could not load the MITRE ATT&CK data to pair the techniques of {rule_file} with their tactics - {e}")
+            return None
+        tactics = []
+        for name in mapping.get(technique, []):
+            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tactics:
+                tactics.append(MITRE_TACTICS[name])
+        return tactics or None
+
+    def rule_entity_mappings(self, rule_content, rule_file):
+        """The entity mappings droid manages for a rule, or None when it
+        manages none
+
+        The rule's custom.xdr_entity_mappings win over the ones of its log
+        source, from the entity_mappings_groups of the configuration. A rule
+        with neither is created with the device mapped, and after that its
+        entities are left as they are: Microsoft converted the impactedAssets
+        of the rules deployed before into entities, often more than droid's
+        default, which enforcing it would strip.
+        """
+        # Not custom.entity_mappings: Sentinel reads that key with its own
+        # vocabulary (Account/FullName), which XDR rejects
+        if "xdr_entity_mappings" in rule_content.get("custom", {}):
+            return self.parse_entity_mappings(rule_content["custom"]["xdr_entity_mappings"], rule_file=rule_file)
+        # A raw rule may have no log source to match a group on
+        if self._entity_mappings_groups and rule_content.get("logsource"):
+            group = get_pipeline_group_match(rule_content, self._entity_mappings_groups)
+            if group:
+                self.logger.debug(f"Applying the entity mappings of group {group}")
+                return self.parse_entity_mappings(
+                    self._entity_mappings_groups[group]["entity_mappings"], rule_file=rule_file
+                )
+        return None
+
+    def build_tactics(self, rule_content, rule_file=None):
+        """Build the alertTemplate tactics from the rule's ATT&CK tags
+
+        Sigma tags tactics and techniques separately, while Graph refuses a
+        technique under a tactic it does not belong to. Each technique goes
+        under the tagged tactics it belongs to in ATT&CK, or under its own
+        tactics when the rule tags none of them. Sub-techniques are grouped
+        under their technique.
+        """
+        tagged = []
+        techniques = {}
+        for tag in rule_content.get("tags") or []:
+            tag = tag.lower().strip()
+            if not tag.startswith("attack."):
+                continue
+            name = tag[len("attack."):]
+            if name in MITRE_TACTICS and MITRE_TACTICS[name] not in tagged:
+                tagged.append(MITRE_TACTICS[name])
+            match = re.fullmatch(r"(t[0-9]{4})(\.[0-9]{3})?", name)
+            if match:
+                sub_techniques = techniques.setdefault(match.group(1).upper(), [])
+                if match.group(2) and name.upper() not in sub_techniques:
+                    sub_techniques.append(name.upper())
+
+        tactics = {tactic: [] for tactic in tagged}
+        for technique, sub_techniques in techniques.items():
+            own_tactics = self._attack_tactics_of(technique, rule_file)
+            if own_tactics is None:
+                # Without ATT&CK, the tagged tactics are the best guess: a pair
+                # Graph refuses is dropped when pushing the rule
+                targets = tagged
+            else:
+                targets = [tactic for tactic in tagged if tactic in own_tactics] or own_tactics
+            if not targets:
+                self.logger.warning(f"Rule {rule_file} tags {technique} without any tactic, it is not pushed")
+            for tactic in targets:
+                tactics.setdefault(tactic, []).append(
+                    {"technique": technique, "subTechniques": list(sub_techniques)}
+                )
+        return [{"tactic": tactic, "techniques": entries} for tactic, entries in tactics.items()]
+
+    @staticmethod
+    def _without_invalid_techniques(payload, error_message):
+        """Drop from a payload the technique and tactic pairs Graph named as
+        invalid, or return None when it named none"""
+        invalid = set(INVALID_TECHNIQUE_PATTERN.findall(error_message or ""))
+        if not invalid:
+            return None
+        payload = copy.deepcopy(payload)
+        for tactic in payload["detectionAction"]["alertTemplate"]["tactics"]:
+            tactic["techniques"] = [
+                technique
+                for technique in tactic["techniques"]
+                if (technique["technique"], tactic["tactic"]) not in invalid
+            ]
+        return payload
+
+    def rule_differences(self, existing_rule, new_rule):
+        """Name the settings where a deployed rule differs from the one droid deploys
+
+        Graph returns every property of a rule, the ones droid leaves unset as
+        nulls, empty strings or empty collections, so each setting is
+        normalised on both sides rather than compared verbatim.
+        """
+        existing_template = (existing_rule.get("detectionAction") or {}).get("alertTemplate") or {}
+        new_template = new_rule["detectionAction"]["alertTemplate"]
+
+        existing_status = existing_rule.get("status")
+        if existing_status == "autoDisabled" and new_rule["status"] == "enabled":
+            # Left as Microsoft set it, see push_detection_rule
+            existing_status = "enabled"
+
+        compared = {
+            "displayName": (existing_rule.get("displayName"), new_rule["displayName"]),
+            "status": (existing_status, new_rule["status"]),
+            "query": (
+                (existing_rule.get("queryCondition") or {}).get("queryText"),
+                new_rule["queryCondition"]["queryText"],
+            ),
+            "frequency": (
+                _duration_seconds((existing_rule.get("schedule") or {}).get("frequency")),
+                _duration_seconds(new_rule["schedule"]["frequency"]),
+            ),
+        }
+        for field in ("title", "description", "severity", "recommendedActions"):
+            compared[field] = (existing_template.get(field) or None, new_template.get(field) or None)
+        if "tactics" in new_template:
+            # Not sent for a rule without tactics, which keeps the deployed ones
+            compared["tactics"] = (
+                _tactic_triples(existing_template.get("tactics")),
+                _tactic_triples(new_template["tactics"]),
+            )
+        compared["automatedActions"] = (
+            _automated_action_set((existing_rule.get("detectionAction") or {}).get("automatedActions")),
+            _automated_action_set(new_rule["detectionAction"]["automatedActions"]),
+        )
+
+        # Only the entities the rule or its log source maps are compared: the
+        # others are Microsoft's, see rule_entity_mappings. The service fills
+        # every category and column, unset ones as empty strings, so both
+        # sides are reduced to their non-empty (category, column, value)
+        # triples before comparing.
+        if "entityMappings" in new_template:
+            compared["entityMappings"] = (
+                self._entity_mapping_triples(existing_template.get("entityMappings")),
+                self._entity_mapping_triples(new_template["entityMappings"]),
+            )
+
+        differences = [field for field, (deployed, wanted) in compared.items() if deployed != wanted]
+        for field in differences:
+            # Shows how Graph stored a value, when it differs from what droid sent
+            self.logger.debug(f"{field} differs, deployed: {compared[field][0]!r}, expected: {compared[field][1]!r}")
+        return differences
+
     def check_rule_changes(self, existing_rule, new_rule):
         try:
-            change = False
-            global_fields = [
-                "displayName",
-                "isEnabled",
-            ]
-            alertTemplate_fields = [
-                "title",
-                "description",
-                "severity",
-                "category",
-                "recommendedActions",
-                "mitreTechniques",
-                "impactedAssets",
-            ]
-
-            for field in global_fields:
-                if existing_rule[field] != new_rule[field]:
-                    change = True
-            for field in alertTemplate_fields:
-                if (
-                    existing_rule["detectionAction"]["alertTemplate"][field]
-                    != new_rule["detectionAction"]["alertTemplate"][field]
-                ):
-                    change = True
-            if (
-                existing_rule["queryCondition"]["queryText"]
-                != new_rule["queryCondition"]["queryText"]
-            ):
-                change = True
-            if existing_rule["schedule"]["period"] != new_rule["schedule"]["period"]:
-                change = True
-            if (
-                existing_rule["detectionAction"]["responseActions"]
-                != new_rule["detectionAction"]["responseActions"]
-            ):
-                change = True
+            differences = self.rule_differences(existing_rule, new_rule)
         except Exception as e:
             self.logger.error(f"Error while checking rule changes {e}")
             return True
-        if change:
-            self.logger.info(f"Rule '{new_rule['displayName']}' has changed")
+        if differences:
+            self.logger.info(f"Rule '{new_rule['displayName']}' has changed: {', '.join(differences)}")
             return True
         else:
             self.logger.info(
@@ -630,18 +891,44 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         existing_rule = self.get_rule(rule_content["id"], tenant_id=tenant_id)
         if existing_rule:
             self.logger.info("Rule already exists")
+            # The id of a rule is set when it is created and never changes. A
+            # rule created on beta has one Graph chose, not the Sigma id.
+            payload = {key: value for key, value in alert_rule.items() if key != "id"}
+            if existing_rule.get("status") == "autoDisabled" and alert_rule["status"] == "enabled":
+                # Microsoft turns off a rule that keeps failing. Turning it back
+                # on every export would only have it fail again: an analyst has
+                # to look at it first.
+                self.logger.warning(
+                    f"Rule {rule_file} was auto-disabled by Microsoft XDR, leaving it disabled - fix and re-enable it on the platform",
+                    extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
+                )
+                payload = {key: value for key, value in payload.items() if key != "status"}
             if not self.check_rule_changes(existing_rule, alert_rule):
                 return True
-            else:
-                api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
-                response, status_code = self._patch(
-                    url=api_url, payload=alert_rule, tenant_id=tenant_id
-                )
+            api_url = f"/security/rules/detectionRules/{existing_rule['id']}"
+            send = self._patch
         else:
+            payload = alert_rule
+            if "entityMappings" not in alert_rule["detectionAction"]["alertTemplate"]:
+                # A rule without entities groups its alerts into incidents poorly
+                payload = copy.deepcopy(alert_rule)
+                payload["detectionAction"]["alertTemplate"]["entityMappings"] = every_entity_category(DEFAULT_ENTITY_MAPPINGS)
             api_url = "/security/rules/detectionRules"
-            response, status_code = self._post(
-                url=api_url, payload=alert_rule, tenant_id=tenant_id
-            )
+            send = self._post
+
+        response, status_code = send(url=api_url, payload=payload, tenant_id=tenant_id)
+
+        if status_code == 400:
+            # Microsoft validates techniques against an ATT&CK older than the
+            # one droid pairs them with: rather than not deploying the rule,
+            # deploy it without the pairs Graph refuses
+            retry_payload = self._without_invalid_techniques(payload, get_error_message(response))
+            if retry_payload is not None:
+                self.logger.warning(
+                    f"Microsoft XDR refused ATT&CK techniques of {rule_file}, deploying it without them: {get_error_message(response)}",
+                    extra={"rule_file": rule_file, "rule_content": rule_content, "tenant_id": tenant_id},
+                )
+                response, status_code = send(url=api_url, payload=retry_payload, tenant_id=tenant_id)
 
         if status_code in (200, 201, 204):
             if isinstance(response, dict) and "error" in response:
@@ -684,174 +971,160 @@ class MicrosoftXDRPlatform(AbstractPlatform):
         )
         raise Exception(f"Could not export the rule {rule_file} {reason}")
 
+    def _action_error(self, message, rule_file):
+        message = f"{message} - {rule_file}"
+        self.logger.error(message)
+        return ValueError(message)
+
     def parse_actions(self, actions, rule_file=None):
+        """Build the detectionAction automatedActions payload from custom.actions
+
+        Rules keep the custom.actions of the removed responseActions: an action
+        name and the identifier of what it acts on. Graph now takes the query
+        column holding that identifier, so each identifier becomes its column.
+        Every collection droid manages is sent, empty when unused, so that an
+        action removed from a rule is removed from the platform too.
+        """
         # TODO: It might be better to have a schema validation for the actions
-        response_actions = []
-        for action in actions:
-            response_action = {}
-            if "action" in action:
-                action_name = action["action"]
-                if not action_name in [
-                    "forceUserPasswordReset",
-                    "disableUser",
-                    "markUserAsCompromised",
-                    "stopAndQuarantineFile",
-                    "restrictAppExecution",
-                    "initiateInvestigation",
-                    "runAntivirusScan",
-                    "collectInvestigationPackage",
-                    "isolateDevice",
-                    "blockFile",
-                    "allowFile",
-                ]:
-                    self.logger.warning(
-                        f"Only these actiontypes are allowed: forceUserPasswordReset, disableUser, markUserAsCompromised, stopAndQuarantineFile, restrictAppExecution, initiateInvestigation, runAntivirusScan, collectInvestigationPackage, isolateDevice, blockFile, allowFile. {rule_file}"
-                    )
-                    continue
-                response_action["@odata.type"] = (
-                    f"#microsoft.graph.security.{action_name}ResponseAction"
+        automated_actions = {collection: [] for collection, _ in AUTOMATED_ACTIONS.values()}
+        for action in actions or []:
+            action_name = action.get("action")
+            if not action_name:
+                raise self._action_error("Action Name is missing from the rule", rule_file)
+            if action_name not in AUTOMATED_ACTIONS:
+                self.logger.warning(
+                    f"Only these actiontypes are allowed: {', '.join(AUTOMATED_ACTIONS)}. {rule_file}"
                 )
-                # Isolate Device needs the field isolationType
-                if action_name == "isolateDeviceResponseAction":
-                    if "isolationType" in action:
-                        response_action["isolationType"] = action["isolationType"]
-                    else:
-                        self.logger.error(
-                            f"Isolation Type ('selective' or 'full') is missing from the rule {rule_file}"
-                        )
-                        raise
-                # Block File needs the field deviceGroupNames but it can easily be an empty list
-                if action_name == "blockFileResponseAction":
-                    if "deviceGroupNames" in action:
-                        if isinstance(action["deviceGroupNames"], str):
-                            response_action["deviceGroupNames"] = [
-                                action["deviceGroupNames"]
-                            ]
-                        elif isinstance(action["deviceGroupNames"], list):
-                            response_action["deviceGroupNames"] = action[
-                                "deviceGroupNames"
-                            ]
-                        elif action["deviceGroupNames"] is None:
-                            response_action["deviceGroupNames"] = []
-                        else:
-                            response_action["deviceGroupNames"] = []
-                # These actions all have an identifier invisible in the GUI.
-                # So we add it automatically, it's still possible to overwrite though
-                if action_name in [
-                    "restrictAppExecution",
-                    "initiateInvestigation",
-                    "runAntivirusScan",
-                    "collectInvestigationPackage",
-                    "isolateDevice",
-                ]:
-                    response_action["identifier"] = "deviceId"
-            else:
-                self.logger.error(f"Action Name is missing from the rule {rule_file}")
-                raise
-            if "identifier" in action:
-                if isinstance(action["identifier"], list):
-                    identifier = ",".join(action["identifier"])
-                else:
-                    identifier = action["identifier"]
-                # Define a mapping of action names to valid identifiers
-                valid_identifiers = {
-                    "forceUserPasswordReset": [
-                        "accountSid",
-                        "initiatingProcessAccountSid",
-                    ],
-                    "initiatingProcessAccountSid": [
-                        "accountSid",
-                        "initiatingProcessAccountSid",
-                    ],
-                    "markUserAsCompromised": [
-                        "accountObjectId",
-                        "initiatingProcessAccountObjectId",
-                    ],
-                    "stopAndQuarantineFile": ["sha1", "initiatingProcessSHA1"],
-                    "blockFile": [
-                        "sha256",
-                        "sha1",
-                        "initiatingProcessSHA1",
-                        "initiatingProcessSHA256",
-                    ],
-                    "allowFile": [
-                        "sha256",
-                        "sha1",
-                        "initiatingProcessSHA1",
-                        "initiatingProcessSHA256",
-                    ],
-                }
-                # Check if the action_name is in the valid_identifiers dictionary
-                if action_name in valid_identifiers:
-                    if identifier not in valid_identifiers[action_name]:
-                        self.logger.error(
-                            f"Identifier for {action_name} must be one of {valid_identifiers[action_name]} - {rule_file}"
-                        )
-                        raise
-                # And of course there is an exeption
-                # stopAndQuarantineFile needs deviceId as always, but in a comma separated list
-                if action_name == "stopAndQuarantineFile":
-                    identifier += ",deviceId"
-                response_action["identifier"] = identifier
-            if not "identifier" in response_action:
-                self.logger.error(
-                    f"Action Identifier is missing from the rule {rule_file}"
-                )
-                raise
+                continue
+            collection, valid_identifiers = AUTOMATED_ACTIONS[action_name]
 
-            response_actions.append(response_action)
-        return response_actions
+            identifiers = action.get("identifier")
+            if identifiers is None and valid_identifiers == ["deviceId"]:
+                # Device actions always act on the device, which the GUI never asks for
+                identifiers = "deviceId"
+            if not identifiers:
+                raise self._action_error(f"Action Identifier is missing from the rule for {action_name}", rule_file)
+            if isinstance(identifiers, str):
+                identifiers = identifiers.split(",")
 
-    def parse_impactedAssets(self, impactedAssets, rule_file=None):
-        impactedAssetsList = []
-        for asset in impactedAssets:
-            if "impactedAssetType" in asset and "identifier" in asset:
-                impactedAssetType = asset["impactedAssetType"].capitalize()
-                identifier = asset["identifier"]
-                # Define a mapping of action names to valid identifiers
-                valid_identifiers = {
-                    "Device": ["deviceId", "deviceName"],
-                    "Mailbox": ["accountUpn", "initiatingProcessAccountUpn"],
-                    "User": [
-                        "accountObjectId",
-                        "accountSid",
-                        "accountUpn",
-                        "accountName",
-                        "accountDomain",
-                        "accountId",
-                        "requestAccountSid",
-                        "requestAccountName",
-                        "requestAccountDomain",
-                        "recipientObjectId",
-                        "processAccountObjectId",
-                        "initiatingAccountSid",
-                        "initiatingProcessAccountUpn",
-                        "initiatingAccountName",
-                        "initiatingAccountDomain",
-                        "servicePrincipalId",
-                        "servicePrincipalName",
-                        "targetAccountUpn",
-                    ],
-                }
-                # Check if the action_name is in the valid_identifiers dictionary
-                if impactedAssetType in valid_identifiers:
-                    if identifier not in valid_identifiers[impactedAssetType]:
-                        self.logger.error(
-                            f"Identifier for {impactedAssetType} must be one of {valid_identifiers[impactedAssetType]} - {rule_file}"
-                        )
-                        raise
-                    else:
-                        impactedAsset = {
-                            "@odata.type": f"#microsoft.graph.security.impacted{impactedAssetType}Asset",
-                            "identifier": identifier,
-                        }
-                        impactedAssetsList.append(impactedAsset)
-                else:
-                    self.logger.error(
-                        f"Impacted Asset Type {impactedAssetType} is not valid - {rule_file}"
+            automated_action = {}
+            for identifier in identifiers:
+                identifier = identifier.strip()
+                if identifier not in valid_identifiers:
+                    raise self._action_error(
+                        f"Identifier for {action_name} must be one of {valid_identifiers}", rule_file
                     )
-                    raise
-        return impactedAssetsList
+                column_property, column = IDENTIFIER_COLUMNS[identifier]
+                if column_property in automated_action:
+                    raise self._action_error(
+                        f"Identifiers for {action_name} give {column_property} twice", rule_file
+                    )
+                automated_action[column_property] = column
+
+            if action_name == "stopAndQuarantineFile":
+                # The file is stopped on the device it was seen on
+                automated_action["deviceIdColumn"] = IDENTIFIER_COLUMNS["deviceId"][1]
+            if action_name == "isolateDevice":
+                if action.get("isolationType") not in ("full", "selective"):
+                    raise self._action_error(
+                        "Isolation Type ('selective' or 'full') is missing from the rule", rule_file
+                    )
+                automated_action["isolationType"] = action["isolationType"]
+            if action_name in ("blockFile", "allowFile") and "deviceGroupNames" in action:
+                device_group_names = action["deviceGroupNames"]
+                if isinstance(device_group_names, str):
+                    device_group_names = [device_group_names]
+                automated_action["deviceGroupNames"] = device_group_names if isinstance(device_group_names, list) else []
+
+            automated_actions[collection].append(automated_action)
+        return automated_actions
+
+    # Valid column identifiers per entity category, from the Graph
+    # entityMappingConfiguration complex type.
+    ENTITY_MAPPING_COLUMNS = {
+        "accounts": "aadUserIdColumn dnsDomainColumn nameColumn ntDomainColumn sidColumn upnColumn upnSuffixColumn",
+        "amazonResources": "amazonResourceIdColumn",
+        "azureResources": "resourceIdColumn",
+        "cloudApplications": "appIdColumn nameColumn",
+        "dns": "domainNameColumn hostIpAddressColumn serverIpColumn",
+        "files": "nameColumn sha1Column sha256Column",
+        "googleCloudResources": "fullResourceNameColumn",
+        "hosts": "deviceIdColumn dnsDomainColumn nameColumn netBiosNameColumn ntDomainColumn",
+        "ips": "addressColumn scopeColumn",
+        "mailboxes": "primaryAddressColumn",
+        "mailClusters": "queryColumn sourceColumn",
+        "mailMessages": "networkMessageIdColumn recipientColumn senderColumn subjectColumn",
+        "oAuthApplications": "oAuthAppIdColumn",
+        "processes": "sha1Column sha256Column",
+        "registryValues": "keyColumn valueNameColumn",
+        "securityGroups": "distinguishedNameColumn objectIdColumn sidColumn",
+        "urls": "addressColumn",
+    }
+
+    def _entity_mapping_error(self, message, rule_file):
+        message = f"{message} - {rule_file}"
+        self.logger.error(message)
+        return ValueError(message)
+
+    def parse_entity_mappings(self, entity_mappings, rule_file=None):
+        """Build the alertTemplate entityMappings payload from custom.xdr_entity_mappings.
+
+        The YAML has the shape of the Sentinel custom.entity_mappings, with the
+        Graph vocabulary instead: a list of entries, each with an entity_type
+        and field_mappings of identifier/column_name pairs. Every entry becomes
+        one mapping object in the matching category of the Graph
+        entityMappingConfiguration.
+        """
+        entityMappingConfiguration = {}
+        for mapping in entity_mappings:
+            entity_type = mapping.get("entity_type")
+            if entity_type not in self.ENTITY_MAPPING_COLUMNS:
+                raise self._entity_mapping_error(
+                    f"Entity mappings need 'entity_type' one of {sorted(self.ENTITY_MAPPING_COLUMNS)}",
+                    rule_file,
+                )
+            mapping_entry = {}
+            for field in mapping.get("field_mappings") or []:
+                identifier = field.get("identifier")
+                column_name = field.get("column_name")
+                if not identifier or not column_name:
+                    raise self._entity_mapping_error(
+                        "Entity mapping field_mappings need 'identifier' and 'column_name'",
+                        rule_file,
+                    )
+                if identifier not in self.ENTITY_MAPPING_COLUMNS[entity_type].split():
+                    raise self._entity_mapping_error(
+                        f"Identifier for {entity_type} must be one of {self.ENTITY_MAPPING_COLUMNS[entity_type].split()}",
+                        rule_file,
+                    )
+                mapping_entry[identifier] = column_name
+            if not mapping_entry:
+                raise self._entity_mapping_error(
+                    "Entity mappings need non-empty 'field_mappings'", rule_file
+                )
+            entityMappingConfiguration.setdefault(entity_type, []).append(
+                mapping_entry
+            )
+        return entityMappingConfiguration
+
+    @staticmethod
+    def _entity_mapping_triples(entity_mappings):
+        # Reduce an entityMappingConfiguration to its non-empty
+        # (category, column, value) triples, so a payload that only lists the
+        # mapped columns compares equal to the service response that fills
+        # every category and column with empty strings. @odata annotations
+        # Graph may add are not mappings, and would otherwise differ forever.
+        triples = set()
+        if not entity_mappings:
+            return triples
+        for category, entries in entity_mappings.items():
+            if category.startswith("@odata") or not isinstance(entries, list):
+                continue
+            for entry in entries:
+                for column, value in entry.items():
+                    if value and not column.startswith("@odata"):
+                        triples.add((category, column, value))
+        return triples
 
     def _acquire_token_from_hook(self, hook_url, tenant_id=None, max_retries=5, retry_delay=10):
         if not tenant_id:

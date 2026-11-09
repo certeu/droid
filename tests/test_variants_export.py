@@ -16,6 +16,7 @@ SIGMA_RULE = {
     "description": "A suspicious process was started",
     "level": "high",
     "status": "stable",
+    "tags": ["attack.execution"],
     "logsource": {"category": "process_creation", "product": "windows"},
 }
 
@@ -48,6 +49,8 @@ def _xdr_platform_recording_pushes():
     platform = MicrosoftXDRPlatform(XDR_PARAMETERS, LOGGER_PARAM, export_mssp=True)
     pushed = []
     platform.push_detection_rule = lambda **kwargs: pushed.append(kwargs["tenant_id"])
+    # Looking a skipped tenant up for an orphan rule must not reach Graph
+    platform.get_rule = lambda rule_id, tenant_id=None: None
 
     return platform, pushed
 
