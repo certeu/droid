@@ -227,6 +227,14 @@ def integrity_rule_sentinel(
     elif is_disabled is None and saved_search.enabled:
         logger.info("The rule is enabled as expected")
 
+    from droid.platforms.sentinel import sentinel_rule_kind
+
+    expected_kind = sentinel_rule_kind(rule_content)
+    deployed_kind = getattr(saved_search.kind, "value", saved_search.kind)
+    if deployed_kind != expected_kind:
+        logger.error(f"The rule is deployed as a {deployed_kind} rule instead of a {expected_kind} rule")
+        error = True
+
     if error:
         return error
 

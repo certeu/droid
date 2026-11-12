@@ -3,6 +3,7 @@ Module for Azure Sentinel
 """
 
 import concurrent.futures
+import copy
 import azure.mgmt.resourcegraph as arg
 import re
 import requests
@@ -15,7 +16,7 @@ from azure.core.credentials import AccessToken, TokenCredential
 from azure.mgmt.resource.subscriptions import SubscriptionClient
 from azure.mgmt.securityinsight import SecurityInsights
 from azure.mgmt.securityinsight.models import TriggerOperator
-from azure.mgmt.securityinsight.models import ScheduledAlertRule
+from azure.mgmt.securityinsight.models import ScheduledAlertRule, NrtAlertRule
 from azure.mgmt.securityinsight.models import EventGroupingSettings
 from azure.mgmt.securityinsight.models import IncidentConfiguration
 from azure.mgmt.securityinsight.models import GroupingConfiguration
@@ -27,6 +28,22 @@ from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from droid.platforms.common import get_search_days_ago, get_token_hook_headers
 from droid.variants import customer_serves_variant
+
+def sentinel_rule_kind(rule_content) -> str:
+    """The kind of analytics rule a Sigma rule is deployed as
+
+    custom.query_period: 0 asks for a near real-time rule, as it does on
+    Defender XDR. Any other rule is a scheduled one.
+    """
+    if str(rule_content.get("custom", {}).get("query_period")) == "0":
+        return "NRT"
+    return "Scheduled"
+
+
+def _kind(alert_rule) -> str:
+    """The kind of a rule, whether the SDK holds it as an enum or a str"""
+    return getattr(alert_rule.kind, "value", alert_rule.kind)
+
 
 class CustomTokenCredential:
     def __init__(self, token: str, expires_on: int):
@@ -62,7 +79,6 @@ class SentinelPlatform(AbstractPlatform):
             "grouping_status",
             "grouping_period",
             "grouping_method",
-            "suppress_period",
             "query_frequency",
             "query_period",
             "subscription_id",
@@ -87,7 +103,12 @@ class SentinelPlatform(AbstractPlatform):
         self._query_frequency = self._parameters["query_frequency"]
         self._query_period = self._parameters["query_period"]
         self._suppress_status = self._parameters["suppress_status"]
-        self._suppress_period = self._parameters["suppress_period"]
+        # Sentinel wants a suppression duration even with suppression off:
+        # suppress_period is only required when it is used, and defaults to
+        # the 5 hours of the portal otherwise
+        if self._suppress_status and "suppress_period" not in self._parameters:
+            raise Exception('SentinelPlatform: "suppress_period" parameter is required when "suppress_status" is true.')
+        self._suppress_period = self._parameters.get("suppress_period", 5)
         self._incident_status = self._parameters["incident_status"]
         self._grouping_status = self._parameters["grouping_status"]
         self._grouping_reopen = self._parameters["grouping_reopen"]
@@ -646,6 +667,55 @@ class SentinelPlatform(AbstractPlatform):
                 raise
 
 
+    def push_rule(self, client, resource_group_name, workspace_name, rule_id, alert_rule, rule_file):
+        """Create or update a rule in a workspace
+
+        Microsoft Sentinel cannot be relied on to change the kind of a deployed
+        rule in place: a rule switched between scheduled and NRT is deleted,
+        then created again.
+        """
+
+        try:
+            deployed_rule = client.alert_rules.get(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id
+            )
+        except ResourceNotFoundError:
+            deployed_rule = None
+
+        if deployed_rule is None or _kind(deployed_rule) == _kind(alert_rule):
+            client.alert_rules.create_or_update(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id,
+                alert_rule=alert_rule
+            )
+            return
+
+        self.logger.info(
+            f"Replacing the {_kind(deployed_rule)} rule {rule_file} in {workspace_name} "
+            f"with a {_kind(alert_rule)} rule"
+        )
+        client.alert_rules.delete(
+            resource_group_name=resource_group_name,
+            workspace_name=workspace_name,
+            rule_id=rule_id
+        )
+        try:
+            client.alert_rules.create_or_update(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id,
+                alert_rule=alert_rule
+            )
+        except Exception:
+            self.logger.error(
+                f"The rule {rule_file} was deleted from {workspace_name} to change its kind, "
+                "but could not be created again: it is no longer deployed there"
+            )
+            raise
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
         Create a scheduled alert rule in Sentinel
@@ -691,71 +761,59 @@ class SentinelPlatform(AbstractPlatform):
         else:
             severity = rule_content['level']
 
-        if self._suppress_status == True:
-            suppression_enabled = True
-            suppression_duration = timedelta(hours=self._suppress_period)
-        else:
-            suppression_enabled = False
-            suppression_duration = None
+        # The API requires a suppression duration even when suppression is off
+        suppression_enabled = self._suppress_status == True
+        suppression_duration = timedelta(hours=self._suppress_period)
 
-        if self._incident_status == True:
-            create_incident = True
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method
-                )
-                if rule_content.get("custom", {}).get("grouping_period"):
-                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
-                if rule_content.get("custom", {}).get("grouping_matching_entities"):
-                    grouping_config.matching_method = "Selected"
-                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
-            else:
-                grouping_config = None
-        else:
-            create_incident = False
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method
-                )
-                if rule_content.get("custom", {}).get("grouping_period"):
-                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
-                if rule_content.get("custom", {}).get("grouping_matching_entities"):
-                    grouping_config.matching_method = "Selected"
-                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
-            else:
-                grouping_config = None
+        # Sent even when grouping is off, as the portal does
+        grouping_config = GroupingConfiguration(
+            enabled=bool(self._grouping_status),
+            reopen_closed_incident=self._grouping_reopen,
+            lookback_duration=timedelta(hours=self._grouping_period),
+            matching_method=self._grouping_method
+        )
+        if rule_content.get("custom", {}).get("grouping_period"):
+            grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
+        if rule_content.get("custom", {}).get("grouping_matching_entities"):
+            grouping_config.matching_method = "Selected"
+            grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
 
-        alert_rule = ScheduledAlertRule(
+        rule_settings = dict(
             query=rule_converted,
             description=rule_content['description'],
             display_name=display_name,
             severity=severity,
-            query_frequency=timedelta(hours=self._query_frequency),
-            query_period=timedelta(hours=self._query_period),
-            trigger_operator=TriggerOperator(self._threshold_operator),
-            trigger_threshold=self._threshold_value,
             enabled=enabled,
             suppression_duration=suppression_duration,
             suppression_enabled=suppression_enabled,
             event_grouping_settings=EventGroupingSettings(aggregation_kind="SingleAlert"),
-            incident_configuration=IncidentConfiguration(create_incident=create_incident, grouping_configuration=grouping_config),
+            incident_configuration=IncidentConfiguration(create_incident=self._incident_status == True,
+                                                         grouping_configuration=grouping_config),
             tactics=self.mitre_tactics(rule_content),
             entity_mappings=entity_mappings,
             sentinel_entities_mappings=sentinel_entity_mappings,
             techniques=self.mitre_techniques(rule_content)
         )
 
-        if rule_content.get("custom", {}).get("query_frequency"):
-            alert_rule.query_frequency = timedelta(hours=rule_content["custom"]["query_frequency"])
+        # An NRT rule runs every minute on newly ingested data, and has no
+        # frequency, lookback or threshold
+        if sentinel_rule_kind(rule_content) == "NRT":
+            self.logger.debug(f"Exporting {rule_file} as a near real-time rule")
+            alert_rule = NrtAlertRule(**rule_settings)
+        else:
+            alert_rule = ScheduledAlertRule(
+                query_frequency=timedelta(hours=self._query_frequency),
+                query_period=timedelta(hours=self._query_period),
+                trigger_operator=TriggerOperator(self._threshold_operator),
+                trigger_threshold=self._threshold_value,
+                **rule_settings
+            )
 
-        if rule_content.get("custom", {}).get("query_period"):
-            alert_rule.query_period = timedelta(hours=rule_content["custom"]["query_period"])
+            if rule_content.get("custom", {}).get("query_frequency"):
+                alert_rule.query_frequency = timedelta(hours=rule_content["custom"]["query_frequency"])
+
+            if rule_content.get("custom", {}).get("query_period"):
+                alert_rule.query_period = timedelta(hours=rule_content["custom"]["query_period"])
 
         if self._export_mssp:
             if self._export_list_mssp:
@@ -795,25 +853,8 @@ class SentinelPlatform(AbstractPlatform):
                                 rule_content, rule_file, self, customer_filter_dir
                             )
                             # Create a copy of alert_rule with the customer-specific query
-                            customer_alert_rule = ScheduledAlertRule(
-                                query=customer_rule_converted,
-                                description=rule_content['description'],
-                                display_name=display_name,
-                                severity=severity,
-                                query_frequency=alert_rule.query_frequency,
-                                query_period=alert_rule.query_period,
-                                trigger_operator=alert_rule.trigger_operator,
-                                trigger_threshold=alert_rule.trigger_threshold,
-                                enabled=alert_rule.enabled,
-                                suppression_duration=alert_rule.suppression_duration,
-                                suppression_enabled=alert_rule.suppression_enabled,
-                                event_grouping_settings=alert_rule.event_grouping_settings,
-                                incident_configuration=alert_rule.incident_configuration,
-                                tactics=alert_rule.tactics,
-                                entity_mappings=alert_rule.entity_mappings,
-                                sentinel_entities_mappings=alert_rule.sentinel_entities_mappings,
-                                techniques=alert_rule.techniques
-                            )
+                            customer_alert_rule = copy.copy(alert_rule)
+                            customer_alert_rule.query = customer_rule_converted
                             self.logger.debug(
                                 f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}"
                             )
@@ -830,12 +871,8 @@ class SentinelPlatform(AbstractPlatform):
                     self.logger.debug(f"Exporting rule {rule_file} to '{customer_name or workspace_name}' with query: {customer_rule_converted}")
                     
                     try:
-                        client.alert_rules.create_or_update(
-                            resource_group_name=resource_group_name,
-                            workspace_name=workspace_name,
-                            rule_id=rule_content['id'],
-                            alert_rule=customer_alert_rule
-                        )
+                        self.push_rule(client, resource_group_name, workspace_name,
+                                       rule_content['id'], customer_alert_rule, rule_file)
                         self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
                     except Exception as e:
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
@@ -852,12 +889,8 @@ class SentinelPlatform(AbstractPlatform):
             self.logger.debug(f"Exporting rule {rule_file} with query: {rule_converted}")
             
             try:
-                client.alert_rules.create_or_update(
-                    resource_group_name=self._resource_group,
-                    workspace_name=self._workspace_name,
-                    rule_id=rule_content['id'],
-                    alert_rule=alert_rule
-                )
+                self.push_rule(client, self._resource_group, self._workspace_name,
+                               rule_content['id'], alert_rule, rule_file)
                 self.logger.info(f"Successfully exported the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
             except Exception as e:
                 self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})

@@ -94,9 +94,9 @@ def build_splunk_rule(search="the deployed query", description="A rule", disable
     return {"search": search, "description": description, "disabled": disabled}
 
 
-def build_sentinel_rule(query="the deployed query", description="A rule", enabled=True):
+def build_sentinel_rule(query="the deployed query", description="A rule", enabled=True, kind="Scheduled"):
     return SimpleNamespace(
-        name=RULE_ID, description=description, query=query, enabled=enabled
+        name=RULE_ID, description=description, query=query, enabled=enabled, kind=kind
     )
 
 
@@ -553,3 +553,22 @@ def test_elastic_metadata_added_on_export_is_not_a_difference():
     converted = "FROM logs-* | WHERE true"
 
     assert not run_elastic_integrity(deployed_as_exported(query=converted), query=converted)
+
+
+def test_sentinel_rule_deployed_with_another_kind():
+    """A rule asking for NRT still deployed as a scheduled rule is an integrity error"""
+    platform = FakeSentinelPlatform(build_sentinel_rule(query="the new query"))
+    rule_content = {**build_rule_content(), "custom": {"query_period": 0}}
+    error = run_integrity(
+        platform, rule_content, "the new query", platform_name="microsoft_sentinel"
+    )
+    assert error
+
+
+def test_sentinel_nrt_rule_matching_the_platform():
+    platform = FakeSentinelPlatform(build_sentinel_rule(query="the new query", kind="NRT"))
+    rule_content = {**build_rule_content(), "custom": {"query_period": 0}}
+    error = run_integrity(
+        platform, rule_content, "the new query", platform_name="microsoft_sentinel"
+    )
+    assert not error
