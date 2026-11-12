@@ -20,13 +20,13 @@ from azure.mgmt.securityinsight.models import ScheduledAlertRule, NrtAlertRule
 from azure.mgmt.securityinsight.models import EventGroupingSettings
 from azure.mgmt.securityinsight.models import IncidentConfiguration
 from azure.mgmt.securityinsight.models import GroupingConfiguration
-from azure.mgmt.securityinsight.models import EntityMapping, FieldMapping, SentinelEntityMapping
+from azure.mgmt.securityinsight.models import EntityMapping, EntityMappingType, FieldMapping, SentinelEntityMapping
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from datetime import datetime, timedelta, timezone
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
-from droid.platforms.common import get_search_days_ago, get_token_hook_headers
+from droid.platforms.common import get_pipeline_group_match, get_search_days_ago, get_token_hook_headers
 from droid.variants import customer_serves_variant
 
 def sentinel_rule_kind(rule_content) -> str:
@@ -38,6 +38,18 @@ def sentinel_rule_kind(rule_content) -> str:
     if str(rule_content.get("custom", {}).get("query_period")) == "0":
         return "NRT"
     return "Scheduled"
+
+
+def sentinel_entity_mapping_set(entity_mappings) -> set:
+    """Reduce EntityMapping objects to (entity type, field mappings) pairs,
+    so that the order Sentinel returns them in does not count as a change"""
+    return {
+        (
+            getattr(mapping.entity_type, "value", mapping.entity_type),
+            tuple(sorted((field.identifier, field.column_name) for field in mapping.field_mappings or [])),
+        )
+        for mapping in entity_mappings or []
+    }
 
 
 def _kind(alert_rule) -> str:
@@ -126,6 +138,13 @@ class SentinelPlatform(AbstractPlatform):
         self._alert_prefix = self._parameters.get("alert_prefix", None)
         self._export_list_mssp = self._parameters.get("export_list_mssp", None)
         self._mssp_search_exclude_list = self._parameters.get("mssp_search_exclude_list", None)
+        self._entity_mappings_groups = self._parameters.get("rule_parameters", {}).get("entity_mappings_groups") or {}
+        for group, settings in self._entity_mappings_groups.items():
+            # A mistake in a group would fail every rule of its log source: say
+            # so once, when droid starts
+            if not settings.get("entity_mappings"):
+                raise self._entity_mapping_error("A group needs non-empty 'entity_mappings'", f"entity_mappings_groups.{group}")
+            self.parse_entity_mappings(settings["entity_mappings"], rule_file=f"entity_mappings_groups.{group}")
 
         # Conversion callback for re-converting rules with customer-specific filters
         self._convert_rule_callback = None
@@ -716,6 +735,55 @@ class SentinelPlatform(AbstractPlatform):
             )
             raise
 
+    def _entity_mapping_error(self, message, rule_file):
+        message = f"{message} - {rule_file}"
+        self.logger.error(message)
+        return ValueError(message)
+
+    def parse_entity_mappings(self, entity_mappings, rule_file=None):
+        """Build the EntityMapping list of an analytics rule from a list of
+        entries, each with an entity_type and field_mappings of
+        identifier/column_name pairs, as in custom.entity_mappings
+        """
+        if not isinstance(entity_mappings, list):
+            raise self._entity_mapping_error("'entity_mappings' must be a list", rule_file)
+        entity_types = {entity_type.value for entity_type in EntityMappingType}
+        parsed = []
+        for mapping in entity_mappings:
+            if not isinstance(mapping, dict) or mapping.get("entity_type") not in entity_types:
+                raise self._entity_mapping_error(
+                    f"Unknown entity_type in {mapping}, expected one of {sorted(entity_types)}", rule_file
+                )
+            fields = mapping.get("field_mappings")
+            if not isinstance(fields, list) or not fields or not all(
+                isinstance(field, dict) and field.get("identifier") and field.get("column_name") for field in fields
+            ):
+                raise self._entity_mapping_error(
+                    f"The {mapping['entity_type']} entity needs field_mappings of identifier/column_name pairs", rule_file
+                )
+            field_mappings = [FieldMapping(identifier=field["identifier"], column_name=field["column_name"])
+                              for field in fields]
+            parsed.append(EntityMapping(entity_type=mapping["entity_type"], field_mappings=field_mappings))
+        return parsed
+
+    def rule_entity_mappings(self, rule_content, rule_file):
+        """The entity mappings of a rule, or None when it has none
+
+        The rule's custom.entity_mappings win over the ones of its log source,
+        from the entity_mappings_groups of the configuration.
+        """
+        if rule_content.get("custom", {}).get("entity_mappings"):
+            return self.parse_entity_mappings(rule_content["custom"]["entity_mappings"], rule_file=rule_file)
+        # A raw rule may have no log source to match a group on
+        if self._entity_mappings_groups and rule_content.get("logsource"):
+            group = get_pipeline_group_match(rule_content, self._entity_mappings_groups)
+            if group:
+                self.logger.debug(f"Applying the entity mappings of group {group}")
+                return self.parse_entity_mappings(
+                    self._entity_mappings_groups[group]["entity_mappings"], rule_file=rule_file
+                )
+        return None
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
         Create a scheduled alert rule in Sentinel
@@ -736,14 +804,7 @@ class SentinelPlatform(AbstractPlatform):
             enabled = True
 
         # Handling the entities
-        if rule_content.get('custom', {}).get('entity_mappings'):
-            entity_mappings = []
-            for mapping in rule_content['custom']['entity_mappings']:
-                field_mappings = [FieldMapping(identifier=field['identifier'], column_name=field['column_name'])
-                                    for field in mapping['field_mappings']]
-                entity_mappings.append(EntityMapping(entity_type=mapping['entity_type'], field_mappings=field_mappings))
-        else:
-            entity_mappings = None
+        entity_mappings = self.rule_entity_mappings(rule_content, rule_file)
 
         # Handling the sentinel entities
 

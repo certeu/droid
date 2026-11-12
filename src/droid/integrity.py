@@ -227,13 +227,24 @@ def integrity_rule_sentinel(
     elif is_disabled is None and saved_search.enabled:
         logger.info("The rule is enabled as expected")
 
-    from droid.platforms.sentinel import sentinel_rule_kind
+    from droid.platforms.sentinel import sentinel_entity_mapping_set, sentinel_rule_kind
 
     expected_kind = sentinel_rule_kind(rule_content)
     deployed_kind = getattr(saved_search.kind, "value", saved_search.kind)
     if deployed_kind != expected_kind:
         logger.error(f"The rule is deployed as a {deployed_kind} rule instead of a {expected_kind} rule")
         error = True
+
+    # The rule's own entity mappings, or the ones of its log source
+    try:
+        expected_entities = sentinel_entity_mapping_set(platform.rule_entity_mappings(rule_content, rule_file))
+    except ValueError as e:
+        logger.error(f"Couldn't build the entity mappings of the rule {rule_file} - error {e}")
+        error = True
+    else:
+        if expected_entities != sentinel_entity_mapping_set(getattr(saved_search, "entity_mappings", None)):
+            logger.error("The entity mappings of the rule do not match the platform")
+            error = True
 
     if error:
         return error

@@ -282,3 +282,92 @@ def test_rule_kind():
     assert sentinel.sentinel_rule_kind(_with_custom(query_period=2)) == "Scheduled"
     assert sentinel.sentinel_rule_kind(_with_custom(query_period=0)) == "NRT"
     assert sentinel.sentinel_rule_kind(_with_custom(query_period="0")) == "NRT"
+
+
+# Entity mappings of a log source
+
+PROCESS_CREATION_ENTITIES = [
+    {
+        "entity_type": "Host",
+        "field_mappings": [{"identifier": "HostName", "column_name": "Computer"}],
+    },
+    {
+        "entity_type": "Account",
+        "field_mappings": [{"identifier": "FullName", "column_name": "SubjectUserName"}],
+    },
+]
+
+ENTITY_GROUPS = {
+    "windows_process_creation": {
+        "product": "windows",
+        "category": "process_creation",
+        "entity_mappings": PROCESS_CREATION_ENTITIES,
+    }
+}
+
+
+def _export_grouped(azure, rule=SIGMA_RULE):
+    return _export(azure, rule=rule, rule_parameters={"entity_mappings_groups": ENTITY_GROUPS})
+
+
+def test_a_rule_takes_the_entity_mappings_of_its_log_source(azure):
+    [rule] = _export_grouped(azure)
+
+    assert rule["properties"]["entityMappings"] == [
+        {"entityType": "Host", "fieldMappings": [{"identifier": "HostName", "columnName": "Computer"}]},
+        {"entityType": "Account", "fieldMappings": [{"identifier": "FullName", "columnName": "SubjectUserName"}]},
+    ]
+
+
+def test_a_rule_overrides_the_entity_mappings_of_its_log_source(azure):
+    custom = {
+        "entity_mappings": [
+            {"entity_type": "IP", "field_mappings": [{"identifier": "Address", "column_name": "IpAddress"}]}
+        ]
+    }
+
+    [rule] = _export_grouped(azure, rule=_with_custom(**custom))
+
+    assert rule["properties"]["entityMappings"] == [
+        {"entityType": "IP", "fieldMappings": [{"identifier": "Address", "columnName": "IpAddress"}]}
+    ]
+
+
+def test_a_rule_of_another_log_source_does_not_take_them(azure):
+    rule = {**SIGMA_RULE, "logsource": {"product": "linux", "category": "process_creation"}}
+
+    [pushed] = _export_grouped(azure, rule=rule)
+
+    assert "entityMappings" not in pushed["properties"]
+
+
+def test_a_rule_without_log_source_takes_no_group(azure):
+    """Raw rules may have no log source"""
+
+    rule = {key: value for key, value in SIGMA_RULE.items() if key != "logsource"}
+
+    [pushed] = _export_grouped(azure, rule=rule)
+
+    assert "entityMappings" not in pushed["properties"]
+
+
+@pytest.mark.parametrize(
+    "group",
+    [
+        {"product": "windows", "category": "process_creation"},
+        {"product": "windows", "category": "process_creation", "entity_mappings": [{"entity_type": "hosts"}]},
+        {"product": "windows", "category": "process_creation", "entity_mappings": [{"entity_type": "Host"}]},
+        {
+            "product": "windows",
+            "category": "process_creation",
+            "entity_mappings": [{"entity_type": "Host", "field_mappings": [{"identifier": "HostName"}]}],
+        },
+    ],
+    ids=["no-entity-mappings", "unknown-entity-type", "no-field-mappings", "incomplete-field-mapping"],
+)
+def test_an_invalid_entity_mappings_group_fails_when_droid_starts(group):
+    """It would fail every rule of its log source, each with its own error"""
+
+    parameters = {**PARAMETERS, "rule_parameters": {"entity_mappings_groups": {"windows_process_creation": group}}}
+    with pytest.raises(ValueError):
+        sentinel.SentinelPlatform(parameters, LOGGER_PARAM)
