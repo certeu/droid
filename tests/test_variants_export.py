@@ -4,6 +4,8 @@ Tests of the variant-aware export to MSSP customers
 
 import pytest
 
+from azure.core.exceptions import ResourceNotFoundError
+
 from droid.platforms.ms_xdr import MicrosoftXDRPlatform
 from droid.variants import Variant, variant_rule_content
 
@@ -170,6 +172,9 @@ class FakeAlertRules:
     def __init__(self, subscription_id, pushed):
         self._subscription_id = subscription_id
         self._pushed = pushed
+
+    def get(self, resource_group_name, workspace_name, rule_id):
+        raise ResourceNotFoundError("Not found")
 
     def create_or_update(self, resource_group_name, workspace_name, rule_id, alert_rule):
         self._pushed.append(workspace_name)

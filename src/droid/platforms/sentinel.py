@@ -29,6 +29,22 @@ from droid.color import ColorLogger
 from droid.platforms.common import get_search_days_ago, get_token_hook_headers
 from droid.variants import customer_serves_variant
 
+def sentinel_rule_kind(rule_content) -> str:
+    """The kind of analytics rule a Sigma rule is deployed as
+
+    custom.query_period: 0 asks for a near real-time rule, as it does on
+    Defender XDR. Any other rule is a scheduled one.
+    """
+    if str(rule_content.get("custom", {}).get("query_period")) == "0":
+        return "NRT"
+    return "Scheduled"
+
+
+def _kind(alert_rule) -> str:
+    """The kind of a rule, whether the SDK holds it as an enum or a str"""
+    return getattr(alert_rule.kind, "value", alert_rule.kind)
+
+
 class CustomTokenCredential:
     def __init__(self, token: str, expires_on: int):
         self._token = token
@@ -651,6 +667,55 @@ class SentinelPlatform(AbstractPlatform):
                 raise
 
 
+    def push_rule(self, client, resource_group_name, workspace_name, rule_id, alert_rule, rule_file):
+        """Create or update a rule in a workspace
+
+        Microsoft Sentinel cannot be relied on to change the kind of a deployed
+        rule in place: a rule switched between scheduled and NRT is deleted,
+        then created again.
+        """
+
+        try:
+            deployed_rule = client.alert_rules.get(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id
+            )
+        except ResourceNotFoundError:
+            deployed_rule = None
+
+        if deployed_rule is None or _kind(deployed_rule) == _kind(alert_rule):
+            client.alert_rules.create_or_update(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id,
+                alert_rule=alert_rule
+            )
+            return
+
+        self.logger.info(
+            f"Replacing the {_kind(deployed_rule)} rule {rule_file} in {workspace_name} "
+            f"with a {_kind(alert_rule)} rule"
+        )
+        client.alert_rules.delete(
+            resource_group_name=resource_group_name,
+            workspace_name=workspace_name,
+            rule_id=rule_id
+        )
+        try:
+            client.alert_rules.create_or_update(
+                resource_group_name=resource_group_name,
+                workspace_name=workspace_name,
+                rule_id=rule_id,
+                alert_rule=alert_rule
+            )
+        except Exception:
+            self.logger.error(
+                f"The rule {rule_file} was deleted from {workspace_name} to change its kind, "
+                "but could not be created again: it is no longer deployed there"
+            )
+            raise
+
     def create_rule(self, rule_content, rule_converted, rule_file):
         """Create an analytic rule in Sentinel
         Create a scheduled alert rule in Sentinel
@@ -730,10 +795,9 @@ class SentinelPlatform(AbstractPlatform):
             techniques=self.mitre_techniques(rule_content)
         )
 
-        # custom.query_period: 0 asks for a near real-time rule, as it does on
-        # Defender XDR. An NRT rule runs every minute on newly ingested data,
-        # and has no frequency, lookback or threshold.
-        if str(rule_content.get("custom", {}).get("query_period")) == "0":
+        # An NRT rule runs every minute on newly ingested data, and has no
+        # frequency, lookback or threshold
+        if sentinel_rule_kind(rule_content) == "NRT":
             self.logger.debug(f"Exporting {rule_file} as a near real-time rule")
             alert_rule = NrtAlertRule(**rule_settings)
         else:
@@ -807,12 +871,8 @@ class SentinelPlatform(AbstractPlatform):
                     self.logger.debug(f"Exporting rule {rule_file} to '{customer_name or workspace_name}' with query: {customer_rule_converted}")
                     
                     try:
-                        client.alert_rules.create_or_update(
-                            resource_group_name=resource_group_name,
-                            workspace_name=workspace_name,
-                            rule_id=rule_content['id'],
-                            alert_rule=customer_alert_rule
-                        )
+                        self.push_rule(client, resource_group_name, workspace_name,
+                                       rule_content['id'], customer_alert_rule, rule_file)
                         self.logger.info(f"Successfully exported the rule {rule_file} to {workspace_name}")
                     except Exception as e:
                         self.logger.error(f"Failed to export the rule {rule_file} to {workspace_name} - error: {e}")
@@ -829,12 +889,8 @@ class SentinelPlatform(AbstractPlatform):
             self.logger.debug(f"Exporting rule {rule_file} with query: {rule_converted}")
             
             try:
-                client.alert_rules.create_or_update(
-                    resource_group_name=self._resource_group,
-                    workspace_name=self._workspace_name,
-                    rule_id=rule_content['id'],
-                    alert_rule=alert_rule
-                )
+                self.push_rule(client, self._resource_group, self._workspace_name,
+                               rule_content['id'], alert_rule, rule_file)
                 self.logger.info(f"Successfully exported the rule {rule_file}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content})
             except Exception as e:
                 self.logger.error(f"Could not export the rule {rule_file} - error: {e}", extra={"rule_file": rule_file, "rule_converted": rule_converted, "rule_content": rule_content, "error": e})
