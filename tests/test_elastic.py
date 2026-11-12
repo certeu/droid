@@ -773,6 +773,12 @@ def test_a_non_global_action_is_not_attached_to_a_rule_selecting_nothing():
 
 
 def test_global_defaults_to_true():
+    assert "global" not in ACTIONS["kitchen_log"]
+
+    assert "planet-express-log" in actions_of(export(build_platform(actions=ACTIONS)))
+
+
+def test_an_explicitly_global_action_is_attached_to_a_rule_selecting_nothing():
     actions = {**ACTIONS, "kitchen_log": {**ACTIONS["kitchen_log"], "global": True}}
 
     assert "planet-express-log" in actions_of(export(build_platform(actions=actions)))

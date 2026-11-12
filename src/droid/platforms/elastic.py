@@ -843,7 +843,7 @@ class ElasticPlatform(AbstractPlatform):
         }
 
     def rule_actions(self, rule_content):
-        """Return the actions of a rule, all of them unless it selects some
+        """Return the actions of a rule, the global ones unless it selects some
 
         `elastic_actions` lists the names of the actions, or maps them to the
         parameters the rule overrides, e.g. other recipients for one rule. A rule
