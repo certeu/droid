@@ -14,13 +14,13 @@ from droid.platforms import sentinel
 LOGGER_PARAM = {"debug_mode": False, "json_enabled": False}
 
 SIGMA_RULE = {
-    "id": "a0ed3af5-4d03-45a6-878e-b27c0baa1e31",
-    "title": "Sign-in using the Entra ID break-glass account",
-    "description": "A break-glass account signed in",
+    "id": "89098061-c553-4004-becc-d7a0a021bbb1",
+    "title": "Scheduled task created from a temporary folder",
+    "description": "A scheduled task runs a binary from a temporary folder",
     "level": "critical",
     "status": "stable",
-    "tags": ["attack.privilege-escalation", "attack.t1078.004"],
-    "logsource": {"product": "azure", "service": "signinlogs"},
+    "tags": ["attack.persistence", "attack.t1053.005"],
+    "logsource": {"product": "windows", "category": "process_creation"},
 }
 
 PARAMETERS = {
@@ -86,7 +86,7 @@ def azure(monkeypatch):
     return FakeAzure(monkeypatch)
 
 
-def _export(azure, rule=SIGMA_RULE, query="SigninLogs", parameters=PARAMETERS, **overrides):
+def _export(azure, rule=SIGMA_RULE, query="SecurityEvent", parameters=PARAMETERS, **overrides):
     """Export a rule through the fake API
 
     Return: each rule pushed, as sent to the API
@@ -167,7 +167,7 @@ def test_query_period_zero_makes_a_nrt_rule(azure, query_period):
     assert "queryFrequency" not in rule["properties"]
     assert "queryPeriod" not in rule["properties"]
     assert "triggerOperator" not in rule["properties"]
-    assert rule["properties"]["query"] == "SigninLogs"
+    assert rule["properties"]["query"] == "SecurityEvent"
     assert rule["properties"]["suppressionEnabled"] is False
     assert rule["properties"]["suppressionDuration"] == "PT2H"
     assert rule["properties"]["incidentConfiguration"]["createIncident"] is True
@@ -195,12 +195,12 @@ def test_nrt_rule_reconverted_for_a_customer_stays_nrt(monkeypatch):
         {**PARAMETERS, "export_list_mssp": customers}, LOGGER_PARAM, export_mssp=True
     )
     platform.get_credentials = lambda: None
-    platform.set_convert_rule_callback(lambda *args: "SigninLogs | where Customer == 'zoidberg'")
-    platform.create_rule(_with_custom(query_period=0), "SigninLogs", "rule.yml")
+    platform.set_convert_rule_callback(lambda *args: "SecurityEvent | where Customer == 'zoidberg'")
+    platform.create_rule(_with_custom(query_period=0), "SecurityEvent", "rule.yml")
 
     [rule] = azure.pushed
     assert rule["kind"] == "NRT"
-    assert rule["properties"]["query"] == "SigninLogs | where Customer == 'zoidberg'"
+    assert rule["properties"]["query"] == "SecurityEvent | where Customer == 'zoidberg'"
     assert rule["properties"]["suppressionDuration"] == "PT2H"
     assert ("delete", "workspace-zoidberg") in azure.calls
 
@@ -226,7 +226,7 @@ def test_suppress_period_is_required_with_suppression_on():
 
 def _deployed(kind):
     rule_class = sentinel.NrtAlertRule if kind == "NRT" else sentinel.ScheduledAlertRule
-    return rule_class(query="SigninLogs", display_name="Deployed")
+    return rule_class(query="SecurityEvent", display_name="Deployed")
 
 
 def test_a_rule_switched_to_nrt_replaces_the_deployed_one(monkeypatch):
@@ -271,7 +271,7 @@ def test_a_failed_kind_switch_says_the_rule_is_gone(monkeypatch):
     platform.logger.error = lambda message, *args, **kwargs: errors.append(message)
 
     with pytest.raises(HttpResponseError):
-        platform.create_rule(_with_custom(query_period=0), "SigninLogs", "rule.yml")
+        platform.create_rule(_with_custom(query_period=0), "SecurityEvent", "rule.yml")
 
     assert "workspace-default" not in azure.deployed
     assert any("no longer deployed" in message for message in errors)
