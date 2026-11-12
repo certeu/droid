@@ -396,6 +396,10 @@ class ElasticPlatform(AbstractPlatform):
             name: self.action_policy(name, action) for name, action in self._action_configs.items()
         }
         self._actions = {name: self.build_action(name, action) for name, action in self._action_configs.items()}
+        # The actions attached to a rule that selects none of its own
+        self._global_actions = {
+            name for name, action in self._action_configs.items() if self.action_is_global(name, action)
+        }
 
         # Alert suppression needs a Platinum license
         self._suppress_correlation_alerts = self._parameters.get("suppress_correlation_alerts", True)
@@ -735,6 +739,19 @@ class ElasticPlatform(AbstractPlatform):
         return f"{source} {clause}{rest}"
 
     @staticmethod
+    def action_is_global(name, action):
+        """Whether an action runs on every rule, `global = false` making it opt-in
+
+        Only the rules naming it in custom.elastic_actions get a non-global action.
+        """
+
+        is_global = action.get("global", True)
+        if not isinstance(is_global, bool):
+            raise ValueError(f"ElasticPlatform: action '{name}' needs a boolean 'global', got '{is_global}'")
+
+        return is_global
+
+    @staticmethod
     def action_policy(name, action):
         """Validate what rules may override of an action
 
@@ -776,7 +793,7 @@ class ElasticPlatform(AbstractPlatform):
     def build_action(name, action):
         """Build the Kibana rule action of an `actions` entry of the config"""
 
-        action = {key: value for key, value in action.items() if key not in ("overridable", "allowed_recipient_domains")}
+        action = {key: value for key, value in action.items() if key not in ("overridable", "allowed_recipient_domains", "global")}
         action_type = ACTION_TYPES.get(action.pop("type", None))
         if action_type is None:
             raise ValueError(f"ElasticPlatform: action '{name}' needs a type among {', '.join(ACTION_TYPES)}")
@@ -826,15 +843,16 @@ class ElasticPlatform(AbstractPlatform):
         }
 
     def rule_actions(self, rule_content):
-        """Return the actions of a rule, all of them unless it selects some
+        """Return the actions of a rule, the global ones unless it selects some
 
         `elastic_actions` lists the names of the actions, or maps them to the
-        parameters the rule overrides, e.g. other recipients for one rule.
+        parameters the rule overrides, e.g. other recipients for one rule. A rule
+        that selects nothing takes the global actions.
         """
 
         selected = rule_content.get("custom", {}).get("elastic_actions")
         if selected is None:
-            return list(self._actions.values())
+            return [action for name, action in self._actions.items() if name in self._global_actions]
 
         unknown = [name for name in selected if name not in self._actions]
         if unknown:

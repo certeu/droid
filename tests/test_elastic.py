@@ -760,6 +760,69 @@ def test_rule_changes_detect_a_changed_action():
     assert platform.check_rule_changes(deployed, changed) is True
 
 
+def test_a_non_global_action_is_not_attached_to_a_rule_selecting_nothing():
+    actions = {**ACTIONS, "dispatch_email": {**ACTIONS["dispatch_email"], "global": False}}
+
+    actions_of_rule = actions_of(export(build_platform(actions=actions)))
+
+    assert "planet-express-smtp" not in actions_of_rule
+    # the global actions still run
+    assert {action["action_type_id"] for action in actions_of_rule.values()} == {
+        ".index", ".webhook", ".server-log"
+    }
+
+
+def test_global_defaults_to_true():
+    assert "global" not in ACTIONS["kitchen_log"]
+
+    assert "planet-express-log" in actions_of(export(build_platform(actions=ACTIONS)))
+
+
+def test_an_explicitly_global_action_is_attached_to_a_rule_selecting_nothing():
+    actions = {**ACTIONS, "kitchen_log": {**ACTIONS["kitchen_log"], "global": True}}
+
+    assert "planet-express-log" in actions_of(export(build_platform(actions=actions)))
+
+
+def test_a_rule_opts_in_to_a_non_global_action_by_name():
+    actions = {**ACTIONS, "dispatch_email": {**ACTIONS["dispatch_email"], "global": False}}
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": ["dispatch_email"]}}
+
+    assert list(actions_of(export(build_platform(actions=actions), rule))) == ["planet-express-smtp"]
+
+
+def test_a_rule_opts_in_to_a_non_global_action_and_overrides_it():
+    actions = {**ACTIONS, "dispatch_email": {**ACTIONS["dispatch_email"], "global": False}}
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"to": ["zoidberg@planet-express.local"]}}}}
+
+    action = actions_of(export(build_platform(actions=actions), rule))["planet-express-smtp"]
+
+    assert action["params"]["to"] == ["zoidberg@planet-express.local"]
+
+
+def test_a_non_global_action_still_needs_its_parameters():
+    # unlike a kill switch, an opt-in action is built and checked as usual
+    actions = {"dispatch_email": {"type": "email", "connector_id": "x", "global": False}}
+
+    with pytest.raises(ValueError, match="dispatch_email"):
+        build_platform(actions=actions)
+
+
+def test_a_rule_cannot_override_whether_an_action_is_global():
+    rule = {**RULE_CONTENT, "custom": {"elastic_actions": {"dispatch_email": {"global": False}}}}
+
+    with pytest.raises(ValueError, match="global"):
+        export(build_platform(actions=ACTIONS), rule)
+
+
+@pytest.mark.parametrize("is_global", ["yes", 0, 1])
+def test_invalid_global_is_rejected(is_global):
+    actions = {"kitchen_log": {**ACTIONS["kitchen_log"], "global": is_global}}
+
+    with pytest.raises(ValueError, match="global"):
+        build_platform(actions=actions)
+
+
 # ---------------------------------------------------------------------------
 # EQL correlations
 # ---------------------------------------------------------------------------
