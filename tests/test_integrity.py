@@ -6,8 +6,11 @@ import pytest
 
 from types import SimpleNamespace
 
+from azure.mgmt.securityinsight.models import EntityMapping, FieldMapping
+
 from droid.integrity import integrity_rule
 from droid.platforms.ms_xdr import MicrosoftXDRPlatform
+from droid.platforms.sentinel import SentinelPlatform
 from droid.variants import Variant, variant_rule_content
 
 LOGGER_PARAM = {
@@ -89,14 +92,18 @@ class FakeSentinelPlatform:
     def get_rule(self, rule_content, rule_file):
         return self._saved_search
 
+    def rule_entity_mappings(self, rule_content, rule_file):
+        return None
+
 
 def build_splunk_rule(search="the deployed query", description="A rule", disabled="0"):
     return {"search": search, "description": description, "disabled": disabled}
 
 
-def build_sentinel_rule(query="the deployed query", description="A rule", enabled=True, kind="Scheduled"):
+def build_sentinel_rule(query="the deployed query", description="A rule", enabled=True, kind="Scheduled", entity_mappings=None):
     return SimpleNamespace(
-        name=RULE_ID, description=description, query=query, enabled=enabled, kind=kind
+        name=RULE_ID, description=description, query=query, enabled=enabled, kind=kind,
+        entity_mappings=entity_mappings
     )
 
 
@@ -416,6 +423,109 @@ def test_sentinel_rule_matching_the_platform():
         platform_name="microsoft_sentinel"
     )
     assert not error
+
+
+SENTINEL_PARAMETERS = {
+    "threshold_operator": "GreaterThan",
+    "threshold_value": 0,
+    "suppress_status": False,
+    "incident_status": True,
+    "grouping_reopen": False,
+    "grouping_status": True,
+    "grouping_period": 5,
+    "grouping_method": "AllEntities",
+    "query_frequency": 1,
+    "query_period": 2,
+    "subscription_id": "sub-default",
+    "resource_group": "rg-default",
+    "workspace_id": "ws-default",
+    "workspace_name": "workspace-default",
+    "days_ago": 1,
+    "timeout": 120,
+    "search_auth": "default",
+    "export_auth": "default",
+    "rule_parameters": {
+        "entity_mappings_groups": {
+            "windows_process_creation": {
+                "product": "windows",
+                "category": "process_creation",
+                "entity_mappings": [
+                    {"entity_type": "Host", "field_mappings": [{"identifier": "HostName", "column_name": "Computer"}]},
+                    {"entity_type": "Account", "field_mappings": [{"identifier": "FullName", "column_name": "SubjectUserName"}]},
+                ],
+            }
+        }
+    },
+}
+
+
+def sentinel_entity(entity_type, identifier, column_name):
+    return EntityMapping(
+        entity_type=entity_type, field_mappings=[FieldMapping(identifier=identifier, column_name=column_name)]
+    )
+
+
+GROUP_ENTITIES = [
+    sentinel_entity("Host", "HostName", "Computer"),
+    sentinel_entity("Account", "FullName", "SubjectUserName"),
+]
+
+
+def run_sentinel_integrity(deployed_entities, rule_content=None):
+    platform = SentinelPlatform(SENTINEL_PARAMETERS, LOGGER_PARAM)
+    saved_search = build_sentinel_rule(query="the new query", entity_mappings=deployed_entities)
+    platform.get_rule = lambda rule_content, rule_file: saved_search
+    if rule_content is None:
+        rule_content = build_rule_content()
+        rule_content["logsource"] = {"product": "windows", "category": "process_creation"}
+    return run_integrity(platform, rule_content, "the new query", platform_name="microsoft_sentinel")
+
+
+def test_sentinel_entity_mappings_of_the_log_source_matching_the_platform():
+    """The order Sentinel returns them in does not count"""
+    assert not run_sentinel_integrity(list(reversed(GROUP_ENTITIES)))
+
+
+@pytest.mark.parametrize(
+    "deployed",
+    [
+        None,
+        GROUP_ENTITIES[:1],
+        [sentinel_entity("Host", "HostName", "DeviceName"), GROUP_ENTITIES[1]],
+        GROUP_ENTITIES + [sentinel_entity("IP", "Address", "IpAddress")],
+    ],
+    ids=["removed", "one-missing", "other-column", "one-added"],
+)
+def test_sentinel_entity_mappings_drifting_from_the_log_source(deployed):
+    assert run_sentinel_integrity(deployed)
+
+
+def test_sentinel_rule_entity_mappings_override_the_log_source():
+    rule_content = build_rule_content()
+    rule_content["logsource"] = {"product": "windows", "category": "process_creation"}
+    rule_content["custom"] = {
+        "entity_mappings": [
+            {"entity_type": "IP", "field_mappings": [{"identifier": "Address", "column_name": "IpAddress"}]}
+        ]
+    }
+
+    assert not run_sentinel_integrity([sentinel_entity("IP", "Address", "IpAddress")], rule_content)
+    assert run_sentinel_integrity(GROUP_ENTITIES, rule_content)
+
+
+def test_sentinel_rule_without_entity_mappings_expects_none():
+    rule_content = build_rule_content()
+    rule_content["logsource"] = {"product": "linux", "category": "process_creation"}
+
+    assert not run_sentinel_integrity(None, rule_content)
+    assert run_sentinel_integrity(GROUP_ENTITIES, rule_content)
+
+
+def test_sentinel_rule_with_invalid_entity_mappings_is_an_integrity_error():
+    rule_content = build_rule_content()
+    rule_content["custom"] = {"entity_mappings": [{"entity_type": "hosts"}]}
+
+    assert run_sentinel_integrity(None, rule_content)
 
 
 ELASTIC_PARAMETERS = {
