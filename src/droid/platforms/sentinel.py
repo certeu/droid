@@ -63,7 +63,6 @@ class SentinelPlatform(AbstractPlatform):
             "grouping_status",
             "grouping_period",
             "grouping_method",
-            "suppress_period",
             "query_frequency",
             "query_period",
             "subscription_id",
@@ -88,7 +87,12 @@ class SentinelPlatform(AbstractPlatform):
         self._query_frequency = self._parameters["query_frequency"]
         self._query_period = self._parameters["query_period"]
         self._suppress_status = self._parameters["suppress_status"]
-        self._suppress_period = self._parameters["suppress_period"]
+        # Sentinel wants a suppression duration even with suppression off:
+        # suppress_period is only required when it is used, and defaults to
+        # the 5 hours of the portal otherwise
+        if self._suppress_status and "suppress_period" not in self._parameters:
+            raise Exception('SentinelPlatform: "suppress_period" parameter is required when "suppress_status" is true.')
+        self._suppress_period = self._parameters.get("suppress_period", 5)
         self._incident_status = self._parameters["incident_status"]
         self._grouping_status = self._parameters["grouping_status"]
         self._grouping_reopen = self._parameters["grouping_reopen"]

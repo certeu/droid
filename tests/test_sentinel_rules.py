@@ -182,3 +182,37 @@ def test_nrt_rule_reconverted_for_a_customer_stays_nrt(monkeypatch):
     assert rule["kind"] == "NRT"
     assert rule["properties"]["query"] == "SigninLogs | where Customer == 'zoidberg'"
     assert rule["properties"]["suppressionDuration"] == "PT2H"
+
+
+def test_suppress_period_is_optional_with_suppression_off(monkeypatch):
+    """suppress_period only matters with suppression on, but the API still
+    wants a duration: droid sends one of its own."""
+
+    parameters = {key: value for key, value in PARAMETERS.items() if key != "suppress_period"}
+
+    pushed = []
+
+    class FakeAlertRules:
+        def create_or_update(self, resource_group_name, workspace_name, rule_id, alert_rule):
+            pushed.append(alert_rule.serialize())
+
+    class FakeSecurityInsights:
+        def __init__(self, credential, subscription_id):
+            self.alert_rules = FakeAlertRules()
+
+    monkeypatch.setattr(sentinel, "SecurityInsights", FakeSecurityInsights)
+
+    platform = sentinel.SentinelPlatform(parameters, LOGGER_PARAM)
+    platform.get_credentials = lambda: None
+    platform.create_rule(copy.deepcopy(SIGMA_RULE), "SigninLogs", "rule.yml")
+
+    [rule] = pushed
+    assert rule["properties"]["suppressionEnabled"] is False
+    assert rule["properties"]["suppressionDuration"] == "PT5H"
+
+
+def test_suppress_period_is_required_with_suppression_on():
+    parameters = {key: value for key, value in PARAMETERS.items() if key != "suppress_period"}
+
+    with pytest.raises(Exception, match="suppress_period"):
+        sentinel.SentinelPlatform({**parameters, "suppress_status": True}, LOGGER_PARAM)
