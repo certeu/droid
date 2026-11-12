@@ -3,6 +3,7 @@ Module for Azure Sentinel
 """
 
 import concurrent.futures
+import copy
 import azure.mgmt.resourcegraph as arg
 import re
 import requests
@@ -15,7 +16,7 @@ from azure.core.credentials import AccessToken, TokenCredential
 from azure.mgmt.resource.subscriptions import SubscriptionClient
 from azure.mgmt.securityinsight import SecurityInsights
 from azure.mgmt.securityinsight.models import TriggerOperator
-from azure.mgmt.securityinsight.models import ScheduledAlertRule
+from azure.mgmt.securityinsight.models import ScheduledAlertRule, NrtAlertRule
 from azure.mgmt.securityinsight.models import EventGroupingSettings
 from azure.mgmt.securityinsight.models import IncidentConfiguration
 from azure.mgmt.securityinsight.models import GroupingConfiguration
@@ -691,71 +692,60 @@ class SentinelPlatform(AbstractPlatform):
         else:
             severity = rule_content['level']
 
-        if self._suppress_status == True:
-            suppression_enabled = True
-            suppression_duration = timedelta(hours=self._suppress_period)
-        else:
-            suppression_enabled = False
-            suppression_duration = None
+        # The API requires a suppression duration even when suppression is off
+        suppression_enabled = self._suppress_status == True
+        suppression_duration = timedelta(hours=self._suppress_period)
 
-        if self._incident_status == True:
-            create_incident = True
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method
-                )
-                if rule_content.get("custom", {}).get("grouping_period"):
-                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
-                if rule_content.get("custom", {}).get("grouping_matching_entities"):
-                    grouping_config.matching_method = "Selected"
-                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
-            else:
-                grouping_config = None
-        else:
-            create_incident = False
-            if self._grouping_status:
-                grouping_config = GroupingConfiguration(
-                    enabled=True,
-                    reopen_closed_incident=self._grouping_reopen,
-                    lookback_duration=timedelta(hours=self._grouping_period),
-                    matching_method=self._grouping_method
-                )
-                if rule_content.get("custom", {}).get("grouping_period"):
-                    grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
-                if rule_content.get("custom", {}).get("grouping_matching_entities"):
-                    grouping_config.matching_method = "Selected"
-                    grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
-            else:
-                grouping_config = None
+        # Sent even when grouping is off, as the portal does
+        grouping_config = GroupingConfiguration(
+            enabled=bool(self._grouping_status),
+            reopen_closed_incident=self._grouping_reopen,
+            lookback_duration=timedelta(hours=self._grouping_period),
+            matching_method=self._grouping_method
+        )
+        if rule_content.get("custom", {}).get("grouping_period"):
+            grouping_config.lookback_duration = timedelta(hours=rule_content["custom"]["grouping_period"])
+        if rule_content.get("custom", {}).get("grouping_matching_entities"):
+            grouping_config.matching_method = "Selected"
+            grouping_config.group_by_entities = rule_content["custom"]["grouping_matching_entities"]
 
-        alert_rule = ScheduledAlertRule(
+        rule_settings = dict(
             query=rule_converted,
             description=rule_content['description'],
             display_name=display_name,
             severity=severity,
-            query_frequency=timedelta(hours=self._query_frequency),
-            query_period=timedelta(hours=self._query_period),
-            trigger_operator=TriggerOperator(self._threshold_operator),
-            trigger_threshold=self._threshold_value,
             enabled=enabled,
             suppression_duration=suppression_duration,
             suppression_enabled=suppression_enabled,
             event_grouping_settings=EventGroupingSettings(aggregation_kind="SingleAlert"),
-            incident_configuration=IncidentConfiguration(create_incident=create_incident, grouping_configuration=grouping_config),
+            incident_configuration=IncidentConfiguration(create_incident=self._incident_status == True,
+                                                         grouping_configuration=grouping_config),
             tactics=self.mitre_tactics(rule_content),
             entity_mappings=entity_mappings,
             sentinel_entities_mappings=sentinel_entity_mappings,
             techniques=self.mitre_techniques(rule_content)
         )
 
-        if rule_content.get("custom", {}).get("query_frequency"):
-            alert_rule.query_frequency = timedelta(hours=rule_content["custom"]["query_frequency"])
+        # custom.query_period: 0 asks for a near real-time rule, as it does on
+        # Defender XDR. An NRT rule runs every minute on newly ingested data,
+        # and has no frequency, lookback or threshold.
+        if str(rule_content.get("custom", {}).get("query_period")) == "0":
+            self.logger.debug(f"Exporting {rule_file} as a near real-time rule")
+            alert_rule = NrtAlertRule(**rule_settings)
+        else:
+            alert_rule = ScheduledAlertRule(
+                query_frequency=timedelta(hours=self._query_frequency),
+                query_period=timedelta(hours=self._query_period),
+                trigger_operator=TriggerOperator(self._threshold_operator),
+                trigger_threshold=self._threshold_value,
+                **rule_settings
+            )
 
-        if rule_content.get("custom", {}).get("query_period"):
-            alert_rule.query_period = timedelta(hours=rule_content["custom"]["query_period"])
+            if rule_content.get("custom", {}).get("query_frequency"):
+                alert_rule.query_frequency = timedelta(hours=rule_content["custom"]["query_frequency"])
+
+            if rule_content.get("custom", {}).get("query_period"):
+                alert_rule.query_period = timedelta(hours=rule_content["custom"]["query_period"])
 
         if self._export_mssp:
             if self._export_list_mssp:
@@ -795,25 +785,8 @@ class SentinelPlatform(AbstractPlatform):
                                 rule_content, rule_file, self, customer_filter_dir
                             )
                             # Create a copy of alert_rule with the customer-specific query
-                            customer_alert_rule = ScheduledAlertRule(
-                                query=customer_rule_converted,
-                                description=rule_content['description'],
-                                display_name=display_name,
-                                severity=severity,
-                                query_frequency=alert_rule.query_frequency,
-                                query_period=alert_rule.query_period,
-                                trigger_operator=alert_rule.trigger_operator,
-                                trigger_threshold=alert_rule.trigger_threshold,
-                                enabled=alert_rule.enabled,
-                                suppression_duration=alert_rule.suppression_duration,
-                                suppression_enabled=alert_rule.suppression_enabled,
-                                event_grouping_settings=alert_rule.event_grouping_settings,
-                                incident_configuration=alert_rule.incident_configuration,
-                                tactics=alert_rule.tactics,
-                                entity_mappings=alert_rule.entity_mappings,
-                                sentinel_entities_mappings=alert_rule.sentinel_entities_mappings,
-                                techniques=alert_rule.techniques
-                            )
+                            customer_alert_rule = copy.copy(alert_rule)
+                            customer_alert_rule.query = customer_rule_converted
                             self.logger.debug(
                                 f"Successfully re-converted rule for customer '{customer_name}': {customer_rule_converted}"
                             )
