@@ -320,3 +320,28 @@ def test_designated_search_succeeds(monkeypatch, logger):
     assert error is False
     assert search_warning is True
     assert f"(Sentinel MSSP) 1 hit(s) found in total for {RULE_FILE}" in logger.messages("WARNING")
+
+
+def test_single_workspace_search_asks_the_token_hook_for_log_analytics(monkeypatch):
+    """The token of a search is for Log Analytics, not for the management API"""
+    urls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"access_token": "a-token"}
+
+    monkeypatch.setenv("DROID_AZURE_TOKEN_HOOK", "https://hook.planet-express.local/token?scope={SCOPE}&tenant={TENANT_ID}")
+    monkeypatch.setattr(sentinel.requests, "get", lambda url, **kwargs: urls.append(url) or FakeResponse())
+    fake_logs_query_client(monkeypatch, {"ws-planet-express": 0})
+    platform = sentinel.SentinelPlatform(
+        {**PARAMETERS, "search_auth": "app", "tenant_id": "tenant-planet-express",
+         "client_id": "client-hermes", "client_secret": "not-a-secret"},
+        LOGGER_PARAM,
+    )
+
+    platform.run_sentinel_search("SecurityEvent", RULE_FILE, mssp_mode=False, rule_content=RULE_CONTENT)
+
+    assert urls == ["https://hook.planet-express.local/token?scope=api.loganalytics.io&tenant=tenant-planet-express"]

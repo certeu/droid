@@ -539,7 +539,7 @@ class SentinelPlatform(AbstractPlatform):
 
         self.logger.debug(f"Querying the workspace {self._workspace_id}")
 
-        client = LogsQueryClient(self.get_credentials())
+        client = LogsQueryClient(self.get_credentials(scope="api.loganalytics.io"))
 
         self.logger.debug(f"Searching rule {rule_file} with query: {rule_converted}")
 
