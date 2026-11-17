@@ -155,7 +155,7 @@ def _sentinel_platform_recording_timespans(monkeypatch):
     monkeypatch.setattr(sentinel_module, "LogsQueryClient", FakeLogsQueryClient)
 
     platform = SentinelPlatform(SENTINEL_PARAMETERS, LOGGER_PARAM)
-    platform.get_credentials = lambda scope=None: None
+    platform.get_credentials = lambda **kwargs: None
 
     return platform, timespans
 

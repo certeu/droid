@@ -342,7 +342,7 @@ def test_sentinel_mssp_designated_logs_one_warning_per_customer(monkeypatch):
     )
     recorder = RecordingLogger()
     platform.logger = recorder
-    monkeypatch.setattr(platform, "get_credentials", lambda scope=None: None)
+    monkeypatch.setattr(platform, "get_credentials", lambda **kwargs: None)
     monkeypatch.setattr(sentinel_module, "LogsQueryClient", FakeLogsQueryClient)
 
     total = platform.run_sentinel_search_mssp_designated("SecurityEvent", RULE_FILE, RULE_CONTENT)
@@ -374,7 +374,7 @@ def test_sentinel_mssp_designated_falls_back_to_the_workspace_name(monkeypatch):
     )
     recorder = RecordingLogger()
     platform.logger = recorder
-    monkeypatch.setattr(platform, "get_credentials", lambda scope=None: None)
+    monkeypatch.setattr(platform, "get_credentials", lambda **kwargs: None)
     monkeypatch.setattr(sentinel_module, "LogsQueryClient", FakeLogsQueryClient)
 
     platform.run_sentinel_search_mssp_designated("SecurityEvent", RULE_FILE, RULE_CONTENT)
@@ -409,7 +409,7 @@ def test_per_customer_wording_is_harmonised(logger, monkeypatch):
     )
     recorder = RecordingLogger()
     platform.logger = recorder
-    monkeypatch.setattr(platform, "get_credentials", lambda scope=None: None)
+    monkeypatch.setattr(platform, "get_credentials", lambda **kwargs: None)
     monkeypatch.setattr(sentinel_module, "LogsQueryClient", FakeLogsQueryClient)
     platform.run_sentinel_search_mssp_designated("SecurityEvent", RULE_FILE, RULE_CONTENT)
     sentinel_warning = [w for w in recorder.messages("WARNING") if "on customer" in w]

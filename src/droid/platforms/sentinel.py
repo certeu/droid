@@ -23,7 +23,7 @@ from azure.mgmt.securityinsight.models import GroupingConfiguration
 from azure.mgmt.securityinsight.models import EntityMapping, EntityMappingType, FieldMapping, SentinelEntityMapping
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from datetime import datetime, timedelta, timezone
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from azure.core.exceptions import ResourceNotFoundError
 from droid.abstracts import AbstractPlatform
 from droid.color import ColorLogger
 from droid.platforms.common import get_pipeline_group_match, get_search_days_ago, get_token_hook_headers
@@ -138,6 +138,7 @@ class SentinelPlatform(AbstractPlatform):
         self._alert_prefix = self._parameters.get("alert_prefix", None)
         self._export_list_mssp = self._parameters.get("export_list_mssp", None)
         self._mssp_search_exclude_list = self._parameters.get("mssp_search_exclude_list", None)
+        self._mssp_auth_tenant_id = self._parameters.get("mssp_auth_tenant_id", None)
         self._entity_mappings_groups = self._parameters.get("rule_parameters", {}).get("entity_mappings_groups") or {}
         for group, settings in self._entity_mappings_groups.items():
             # A mistake in a group would fail every rule of its log source: say
@@ -259,8 +260,11 @@ class SentinelPlatform(AbstractPlatform):
                     self.logger.error("Failed to acquire token after maximum retries")
                     raise Exception(f"Token acquisition failed: {str(e)}")
 
-    def get_credentials(self, scope="management.azure.com"):
-        """Get credentials for Azure Sentinel."""
+    def get_credentials(self, scope="management.azure.com", tenant_id=None):
+        """Get credentials for Azure Sentinel.
+
+        tenant_id: tenant issuing the token, the tenant of the platform when None
+        """
         auth_method = self._parameters.get("search_auth", "default")
         custom_token_hook = environ.get('DROID_AZURE_TOKEN_HOOK')
         self.logger.debug(f"Selected authentication method: {auth_method}")
@@ -269,7 +273,7 @@ class SentinelPlatform(AbstractPlatform):
         if custom_token_hook:
             self.logger.debug("Using custom hook to acquire the Azure token")
             try:
-                token, expiration = self._acquire_token_from_hook(custom_token_hook, scope, self._tenant_id)
+                token, expiration = self._acquire_token_from_hook(custom_token_hook, scope, tenant_id or self._tenant_id)
 
                 # Store token and expiration in instance variables
                 self._token = token
@@ -289,10 +293,20 @@ class SentinelPlatform(AbstractPlatform):
         # Use client secret credentials (app registration)
         elif auth_method == "app":
             self.logger.debug("Using ClientSecretCredential")
-            return ClientSecretCredential(self._tenant_id, self._client_id, self._client_secret)
+            return ClientSecretCredential(tenant_id or self._tenant_id, self._client_id, self._client_secret)
 
         # Unsupported authentication method
         raise Exception(f"Unsupported authentication method: {auth_method}")
+
+    def mssp_tenant(self, workspace_tenant_id=None):
+        """Tenant to authenticate against for an MSSP workspace
+
+        With Azure Lighthouse the client workspaces are delegated to the
+        managing tenant, which must issue every token: mssp_auth_tenant_id
+        names it. Without it, the tenant of the workspace, or of the platform
+        when None.
+        """
+        return self._mssp_auth_tenant_id or workspace_tenant_id
 
     def get_workspaces(self, credential=None, export_mode=False):
 
@@ -366,6 +380,9 @@ class SentinelPlatform(AbstractPlatform):
 
         results = client.query_resource(workspace_id, rule_converted, timespan=(start_time, current_time), server_timeout=self._timeout)
 
+        if results.status == LogsQueryStatus.PARTIAL:
+            raise Exception(f"Partial error in query: {results.partial_error}")
+
         result = 0
 
         for table in results.tables:
@@ -405,10 +422,10 @@ class SentinelPlatform(AbstractPlatform):
         days_ago = get_search_days_ago(rule_content, self._days_ago, self.logger)
         start_time = current_time - timedelta(days=days_ago)
         total_result = 0
-        
+        error = False
+
         if not self._export_list_mssp:
-            self.logger.error("No export_list_mssp found for MSSP search")
-            return total_result
+            raise Exception("No export_list_mssp found for MSSP search")
         
         for group, info in self._export_list_mssp.items():
             workspace_id = info.get('workspace_id')
@@ -435,8 +452,7 @@ class SentinelPlatform(AbstractPlatform):
                     )
             
             try:
-                # Get credentials for the specific tenant
-                credential = self.get_credentials(scope="api.loganalytics.io")
+                credential = self.get_credentials(scope="api.loganalytics.io", tenant_id=self.mssp_tenant())
                 client = LogsQueryClient(credential)
                 
                 self.logger.debug(f"Searching rule {rule_file} for '{customer_name or workspace_name}' with query: {customer_rule_converted}")
@@ -457,10 +473,17 @@ class SentinelPlatform(AbstractPlatform):
                     total_result += result
                 elif results.status == LogsQueryStatus.PARTIAL:
                     self.logger.error(f"Rule {rule_file} partial error for {customer_name or workspace_name}: {results.partial_error}")
+                    error = True
                     
             except Exception as e:
                 self.logger.error(f"Could not search rule {rule_file} for workspace {workspace_name}: {e}")
-        
+                error = True
+
+        # The hits of the workspaces searched are logged above: still report
+        # the rule as not searched, the others may hold hits too
+        if error:
+            raise Exception(f"Could not search the rule {rule_file} in one or more workspaces")
+
         return total_result
 
     def run_sentinel_search(self, rule_converted, rule_file, mssp_mode, rule_content=None):
@@ -469,84 +492,71 @@ class SentinelPlatform(AbstractPlatform):
         days_ago = get_search_days_ago(rule_content, self._days_ago, self.logger)
         start_time = current_time - timedelta(days=days_ago)
 
-        try:
-            if mssp_mode:
-                results = {}
+        if mssp_mode:
+            results = {}
+            error = False
 
-                # Check if client_workspaces has already been acquired
-                if self._client_workspaces is None:
-                    self.logger.debug("Fetching client workspaces...")
-                    self._client_workspaces = self.get_workspaces(self.get_credentials())
-                    self.logger.debug(f"Fetched client workspaces: {self._client_workspaces}")
+            # Check if client_workspaces has already been acquired
+            if self._client_workspaces is None:
+                self.logger.debug("Fetching client workspaces...")
+                self._client_workspaces = self.get_workspaces(self.get_credentials(tenant_id=self.mssp_tenant()))
+                self.logger.debug(f"Fetched client workspaces: {self._client_workspaces}")
 
-                client = LogsQueryClient(self.get_credentials(scope="api.loganalytics.io"))
+            client = LogsQueryClient(self.get_credentials(scope="api.loganalytics.io", tenant_id=self.mssp_tenant()))
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                    futures = {executor.submit(self.mssp_run_sentinel_search,
-                                            client,
-                                            rule_converted,
-                                            start_time,
-                                            current_time,
-                                            customer_info): customer_info for customer_info in self._client_workspaces}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(self.mssp_run_sentinel_search,
+                                        client,
+                                        rule_converted,
+                                        start_time,
+                                        current_time,
+                                        customer_info): customer_info for customer_info in self._client_workspaces}
 
-                    for future in concurrent.futures.as_completed(futures):
-                        customer_info = futures[future]
+                for future in concurrent.futures.as_completed(futures):
+                    customer_info = futures[future]
+                    try:
                         customer, result = future.result()
-                        results[customer] = result
+                    except Exception as e:
+                        self.logger.error(f"Could not search rule {rule_file} for workspace {customer_info['customer']}: {e}")
+                        error = True
+                        continue
+                    results[customer] = result
 
-                # Process
-                total_result = 0
+            # Process
+            total_result = 0
 
-                for customer, result in results.items():
-                    if result > 0:
-                        self.logger.warning(f"(Sentinel MSSP) {result} hit(s) found for {rule_file} on customer '{customer}'")
-                    else:
-                        self.logger.info(f"(Sentinel MSSP) No hits for {rule_file} on customer '{customer}'")
-                    total_result += result
+            for customer, result in results.items():
+                if result > 0:
+                    self.logger.warning(f"(Sentinel MSSP) {result} hit(s) found for {rule_file} on customer '{customer}'")
+                else:
+                    self.logger.info(f"(Sentinel MSSP) No hits for {rule_file} on customer '{customer}'")
+                total_result += result
 
-                return total_result
+            if error:
+                raise Exception(f"Could not search the rule {rule_file} in one or more workspaces")
 
-            else:
-                self.logger.debug(f"Querying the workspace {self._workspace_id}")
+            return total_result
 
-                try:
-                    self.logger.debug("Creating the client instance")
-                    client = LogsQueryClient(self.get_credentials())
-                    self.logger.debug("Successfully created the client instance")
-                except HttpResponseError as e:
-                    self.logger.error(f"Error while connecting to Azure error: {e}")
+        self.logger.debug(f"Querying the workspace {self._workspace_id}")
 
-                self.logger.debug(f"Searching rule {rule_file} with query: {rule_converted}")
-                
-                results = client.query_workspace(self._workspace_id,
-                                                rule_converted,
-                                                timespan=(start_time, current_time),
-                                                server_timeout=self._timeout)
+        client = LogsQueryClient(self.get_credentials(scope="api.loganalytics.io"))
 
-            if results.status == LogsQueryStatus.PARTIAL:
-                error = results.partial_error
-                data = results.partial_data
-                self.logger.error(f"Rule {rule_file} partial error in query: {error}")
+        self.logger.debug(f"Searching rule {rule_file} with query: {rule_converted}")
 
-            elif results.status == LogsQueryStatus.SUCCESS:
-                total_result = 0
+        results = client.query_workspace(self._workspace_id,
+                                         rule_converted,
+                                         timespan=(start_time, current_time),
+                                         server_timeout=self._timeout)
 
-                for table in results.tables:
-                    total_result += len(table.rows)
+        if results.status == LogsQueryStatus.PARTIAL:
+            raise Exception(f"Partial error in query: {results.partial_error}")
 
-                return total_result
+        total_result = 0
 
-        except HttpResponseError as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
+        for table in results.tables:
+            total_result += len(table.rows)
 
-        except Exception as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
-
-        except HttpResponseError as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
-
-        except Exception as e:
-            self.logger.error(f"Rule {rule_file} error: {e}")
+        return total_result
 
     def get_rule_mssp(self, rule_content, rule_file,
                       tenant_id, subscription_id, resource_group_name,
@@ -554,8 +564,7 @@ class SentinelPlatform(AbstractPlatform):
         """Retrieve a scheduled alert rule in Sentinel in MSSP mode
         """
 
-        self._tenant_id = tenant_id
-        credential = self.get_credentials()
+        credential = self.get_credentials(tenant_id=self.mssp_tenant(tenant_id))
 
         client = SecurityInsights(credential, subscription_id)
 
@@ -646,13 +655,12 @@ class SentinelPlatform(AbstractPlatform):
                 self.logger.info("Exporting deletion to designated customers")
                 for group, info in self._export_list_mssp.items():
                     workspace_name = info['workspace_name']
-                    self._tenant_id = info['tenant_id']
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
 
                     self.logger.debug(f"Exporting deletion to {workspace_name} from group id {group}")
 
-                    credential = self.get_credentials()
+                    credential = self.get_credentials(tenant_id=self.mssp_tenant(info['tenant_id']))
 
                     client = SecurityInsights(credential, subscription_id)
 
@@ -883,7 +891,6 @@ class SentinelPlatform(AbstractPlatform):
                 for group, info in self._export_list_mssp.items():
 
                     workspace_name = info['workspace_name']
-                    self._tenant_id = info['tenant_id']
                     resource_group_name = info['resource_group_name']
                     subscription_id = info['subscription_id']
                     customer_name = info.get('customer_name')
@@ -924,7 +931,7 @@ class SentinelPlatform(AbstractPlatform):
                                 f"Could not re-convert rule for customer '{customer_name}': {e}. Using default conversion."
                             )
 
-                    credential = self.get_credentials()
+                    credential = self.get_credentials(tenant_id=self.mssp_tenant(info['tenant_id']))
 
                     # Create a new SecurityInsights client for the target subscription
                     client = SecurityInsights(credential, subscription_id)
