@@ -197,7 +197,7 @@ def _sentinel_platform(monkeypatch, deployed_rule):
     monkeypatch.setattr(sentinel, "SecurityInsights", FakeSecurityInsights)
 
     platform = sentinel.SentinelPlatform(SENTINEL_PARAMETERS, LOGGER_PARAM, export_mssp=True)
-    platform.get_credentials = lambda: None
+    platform.get_credentials = lambda **kwargs: None
     platform.get_rule_mssp = lambda *args, **kwargs: deployed_rule
 
     return platform, pushed

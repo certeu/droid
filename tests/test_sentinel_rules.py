@@ -93,7 +93,7 @@ def _export(azure, rule=SIGMA_RULE, query="SecurityEvent", parameters=PARAMETERS
     """
 
     platform = sentinel.SentinelPlatform({**parameters, **overrides}, LOGGER_PARAM)
-    platform.get_credentials = lambda: None
+    platform.get_credentials = lambda **kwargs: None
     platform.create_rule(copy.deepcopy(rule), query, "rule.yml")
 
     return azure.pushed
@@ -194,7 +194,7 @@ def test_nrt_rule_reconverted_for_a_customer_stays_nrt(monkeypatch):
     platform = sentinel.SentinelPlatform(
         {**PARAMETERS, "export_list_mssp": customers}, LOGGER_PARAM, export_mssp=True
     )
-    platform.get_credentials = lambda: None
+    platform.get_credentials = lambda **kwargs: None
     platform.set_convert_rule_callback(lambda *args: "SecurityEvent | where Customer == 'zoidberg'")
     platform.create_rule(_with_custom(query_period=0), "SecurityEvent", "rule.yml")
 
@@ -266,7 +266,7 @@ def test_a_failed_kind_switch_says_the_rule_is_gone(monkeypatch):
 
     azure = FakeAzure(monkeypatch, deployed={"workspace-default": _deployed("Scheduled")}, fail_create=True)
     platform = sentinel.SentinelPlatform(PARAMETERS, LOGGER_PARAM)
-    platform.get_credentials = lambda: None
+    platform.get_credentials = lambda **kwargs: None
     errors = []
     platform.logger.error = lambda message, *args, **kwargs: errors.append(message)
 

@@ -119,6 +119,7 @@ _AZURE_ENV_GROUPS: list[EnvVarGroup] = [
         mappings=[
             EnvVarMapping("DROID_AZURE_SEARCH_AUTH", "search_auth", required=False),
             EnvVarMapping("DROID_AZURE_EXPORT_AUTH", "export_auth", required=False),
+            EnvVarMapping("DROID_AZURE_MSSP_AUTH_TENANT_ID", "mssp_auth_tenant_id", required=False),
         ],
     ),
     # App-credential vars — conditional on auth_method + absence of credential_file
