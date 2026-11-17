@@ -115,7 +115,7 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
         export_list = platform.get_export_list_mssp()
     except Exception as e:
         logger.error(f"Couldn't get the export list for the designated customers - error {e}")
-        return error
+        return True
 
     logger.info("Integrity check for designated customers")
 
@@ -155,20 +155,24 @@ def integrity_rule_sentinel_mssp(rule_converted, rule_content, platform: Sentine
                 workspace_name
             )
         except Exception as e:
+            # A workspace that cannot be read has checked nothing, which is not
+            # a pass: report it, and still check the other workspaces
             logger.error(f"Couldn't check the integrity for the rule {rule_file} on workspace {workspace_name} from {group} - error {e}")
-            return error
+            error_occured = True
+            continue
 
-        error = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
-        if error is not None:
-            return error
+        removed_check = check_rule_removed(rule_content, rule_file, saved_search, logger, error)
+        if removed_check is not None:
+            if removed_check:
+                error_occured = True
+            continue
 
         error = integrity_rule_sentinel(customer_rule_converted, rule_content, platform, rule_file, parameters, logger, error, saved_search=saved_search)
 
         if error:
             error_occured = True
 
-    if error_occured:
-        return error
+    return error_occured
 
 def integrity_rule_sentinel(
         rule_converted, rule_content, platform: SentinelPlatform,
@@ -179,8 +183,9 @@ def integrity_rule_sentinel(
         if not saved_search:
             saved_search: dict = platform.get_rule(rule_content, rule_file)
     except Exception as e:
+        # Integrity that cannot read the rule has checked nothing
         logger.error(f"Couldn't check the integrity for the rule {rule_file} - error {e}")
-        return error
+        return True
 
     mapping = {
         "id": "name",

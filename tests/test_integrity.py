@@ -425,6 +425,109 @@ def test_sentinel_rule_matching_the_platform():
     assert not error
 
 
+class UnreadableSentinelPlatform(FakeSentinelPlatform):
+    """A Sentinel refusing to return the rule of some workspaces, forbidden
+    or unreachable, the single workspace being None"""
+
+    def __init__(self, unreadable, rules=None, export_list=None):
+        super().__init__()
+        self._unreadable = unreadable
+        self._rules = rules or {}
+        self._export_list = export_list
+        self._convert_rule_callback = None
+        self.read = []
+
+    def get_rule(self, rule_content, rule_file):
+        return self.get_rule_mssp(rule_content, rule_file, None, None, None, None)
+
+    def get_rule_mssp(self, rule_content, rule_file, tenant_id, subscription_id, resource_group_name, workspace_name):
+        self.read.append(workspace_name)
+        if workspace_name in self._unreadable:
+            raise Exception("AuthorizationFailed")
+        return self._rules.get(workspace_name)
+
+    def get_export_list_mssp(self):
+        if self._export_list is None:
+            raise Exception("No export_list_mssp found")
+        return self._export_list
+
+
+SENTINEL_WORKSPACES = {
+    "group-panucci": {
+        "tenant_id": "tenant-panucci", "subscription_id": "sub-panucci",
+        "resource_group_name": "rg-panucci", "workspace_name": "panucci",
+    },
+    "group-mom-corp": {
+        "tenant_id": "tenant-mom-corp", "subscription_id": "sub-mom-corp",
+        "resource_group_name": "rg-mom-corp", "workspace_name": "mom-corp",
+    },
+}
+
+
+def test_sentinel_rule_that_cannot_be_read_is_an_integrity_error():
+    """Integrity that cannot read the rule has checked nothing"""
+    platform = UnreadableSentinelPlatform({None})
+    assert run_integrity(platform, build_rule_content(), "the new query", platform_name="microsoft_sentinel")
+
+
+def test_sentinel_mssp_without_export_list_is_an_integrity_error():
+    platform = UnreadableSentinelPlatform(set())
+    assert run_integrity(platform, build_rule_content(), "the new query", mssp=True, platform_name="microsoft_sentinel")
+
+
+def test_sentinel_mssp_workspace_that_cannot_be_read_is_an_integrity_error():
+    platform = UnreadableSentinelPlatform(
+        {"panucci"},
+        rules={"mom-corp": build_sentinel_rule(query="the new query")},
+        export_list=SENTINEL_WORKSPACES,
+    )
+    assert run_integrity(platform, build_rule_content(), "the new query", mssp=True, platform_name="microsoft_sentinel")
+
+
+def test_sentinel_mssp_unreadable_workspace_does_not_hide_the_next_ones():
+    """A workspace that cannot be read must not end the check: the next
+    workspaces are still compared"""
+    platform = UnreadableSentinelPlatform({"panucci"}, export_list=SENTINEL_WORKSPACES)
+
+    run_integrity(platform, build_rule_content(), "the new query", mssp=True, platform_name="microsoft_sentinel")
+
+    assert platform.read == ["panucci", "mom-corp"]
+
+
+def test_sentinel_mssp_missing_rule_does_not_hide_the_next_ones():
+    """A rule missing from a workspace is an error, and the next workspaces
+    are still compared"""
+    platform = UnreadableSentinelPlatform(
+        set(),
+        rules={"mom-corp": build_sentinel_rule(query="the new query")},
+        export_list=SENTINEL_WORKSPACES,
+    )
+
+    assert run_integrity(platform, build_rule_content(), "the new query", mssp=True, platform_name="microsoft_sentinel")
+    assert platform.read == ["panucci", "mom-corp"]
+
+
+def test_sentinel_mssp_rule_matching_every_workspace():
+    platform = UnreadableSentinelPlatform(
+        set(),
+        rules={
+            "panucci": build_sentinel_rule(query="the new query"),
+            "mom-corp": build_sentinel_rule(query="the new query"),
+        },
+        export_list=SENTINEL_WORKSPACES,
+    )
+    assert not run_integrity(platform, build_rule_content(), "the new query", mssp=True, platform_name="microsoft_sentinel")
+
+
+def test_sentinel_mssp_removed_rule_absent_from_every_workspace():
+    """A removed rule already deleted everywhere is not an integrity error"""
+    platform = UnreadableSentinelPlatform(set(), export_list=SENTINEL_WORKSPACES)
+    assert not run_integrity(
+        platform, build_rule_content(removed=True), "the new query", mssp=True, platform_name="microsoft_sentinel"
+    )
+    assert platform.read == ["panucci", "mom-corp"]
+
+
 SENTINEL_PARAMETERS = {
     "threshold_operator": "GreaterThan",
     "threshold_value": 0,
